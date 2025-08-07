@@ -301,6 +301,8 @@ in
             mdev -f -s -S
 
             # Create basic filesystems and setup read/write /etc
+            mkdir -p /dev/pts
+            mount -t devpts devpts -o nosuid,noexec /dev/pts
             mount -t tmpfs tmpfs /tmp
             mkdir -p /tmp/.etc/work /tmp/.etc/upper
             mount -t overlay overlay -o lowerdir=/etc,upperdir=/tmp/.etc/upper,workdir=/tmp/.etc/work /etc 
@@ -362,6 +364,7 @@ in
         "EROFS_FS_ZIP_LZMA"
         "OVERLAY_FS"
         "RD_XZ"
+        "UNIX98_PTYS"
       ];
     }
     {
@@ -381,6 +384,13 @@ in
 
           # /bin (and /sbin)
           ln -sf ${bin}/bin $out/bin && ln -sf $out/bin $out/sbin
+
+          # /tmp is setup as a tmpfs on bootup, symlink it to /run and /var/run
+          # since some programs want to write there, but all should be
+          # ephemeral. We spawn a subshell so that we can have our symlink(s)
+          # be relative to the nix output, not the full path including the nix
+          # output path.
+          (pushd $out && ln -sf ./tmp ./run && ln -sf ./tmp ./var/run)
 
           # /etc
           ${lib.concatLines (
