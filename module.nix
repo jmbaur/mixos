@@ -303,6 +303,7 @@ in
             # Create basic filesystems and setup read/write /etc
             mkdir -p /dev/pts
             mount -t devpts devpts -o nosuid,noexec /dev/pts
+            mount -t configfs configfs /sys/kernel/config
             mount -t tmpfs tmpfs /tmp
             mkdir -p /tmp/.etc/work /tmp/.etc/upper
             mount -t overlay overlay -o lowerdir=/etc,upperdir=/tmp/.etc/upper,workdir=/tmp/.etc/work /etc 
@@ -359,6 +360,7 @@ in
     {
       boot.requiredKernelConfig = [
         "BLK_DEV_LOOP"
+        "CONFIGFS_FS"
         "DEVTMPFS_MOUNT"
         "EROFS_FS"
         "EROFS_FS_ZIP_LZMA"
@@ -398,7 +400,8 @@ in
               pathUnderEtc:
               { source, mode }:
               ''
-                install -Dm${mode} ${source} $out/etc/${pathUnderEtc}
+                mkdir -p $(dirname $out/etc/${pathUnderEtc})
+                ln -sf ${source} $out/etc/${pathUnderEtc}
               ''
             ) config.etc
           )}
