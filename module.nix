@@ -20,6 +20,7 @@ let
     mkOption
     mkOptionType
     optionalAttrs
+    optionalString
     textClosureMap
     types
     ;
@@ -303,7 +304,10 @@ in
             # Create basic filesystems and setup read/write /etc
             mkdir -p /dev/pts
             mount -t devpts devpts -o nosuid,noexec /dev/pts
-            mount -t configfs configfs /sys/kernel/config
+            mount -t configfs configfs -o nosuid,noexec,nodev /sys/kernel/config
+            ${optionalString (config.boot.kernel.config.isYes "DEBUG_FS_ALLOW_ALL") ''
+              mount -t debugfs debugfs -o nosuid,noexec,nodev /sys/kernel/debug
+            ''}
             mount -t tmpfs tmpfs /tmp
             mkdir -p /tmp/.etc/work /tmp/.etc/upper
             mount -t overlay overlay -o lowerdir=/etc,upperdir=/tmp/.etc/upper,workdir=/tmp/.etc/work /etc 
