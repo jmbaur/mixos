@@ -12,6 +12,7 @@ let
     attrNames
     concatMapStringsSep
     escapeShellArgs
+    filterAttrs
     isFunction
     mapAttrs
     mergeOneOption
@@ -39,12 +40,13 @@ let
       action,
       process,
       deps,
+      ...
     }:
     {
       inherit deps;
       text = "${tty}::${action}:${process}";
     }
-  ) config.init;
+  ) (filterAttrs (_: { enable, ... }: enable) config.init);
 
   mountState = escapeShellArgs (
     [ "mount" ]
@@ -170,7 +172,16 @@ in
       type = types.attrsOf (
         types.submodule {
           options = {
+            enable = mkOption {
+              type = types.bool;
+              default = true;
+              description = ''
+                Whether to enable this process on startup.
+              '';
+            };
+
             tty = mkOption {
+              type = types.str;
               default = "null";
               example = "tty1";
               description = ''
@@ -218,14 +229,16 @@ in
             };
 
             process = mkOption {
+              type = types.either types.str types.package;
+              example = "/bin/echo 'hello, world'";
               description = ''
                 Specifies the process to be executed and it's command line.
               '';
             };
 
             deps = mkOption {
-              default = [ ];
               type = types.listOf types.str;
+              default = [ ];
             };
           };
         }
