@@ -302,9 +302,13 @@ in
             mdev -f -s -S
 
             # Create basic filesystems and setup read/write /etc
-            mkdir -p /dev/pts
-            mount -t devpts devpts -o nosuid,noexec /dev/pts
-            mount -t configfs configfs -o nosuid,noexec,nodev /sys/kernel/config
+            ${optionalString (config.boot.kernel.config.isYes "UNIX98_PTYS") ''
+              mkdir -p /dev/pts
+              mount -t devpts devpts -o nosuid,noexec /dev/pts
+            ''}
+            ${optionalString (config.boot.kernel.config.isYes "CONFIGFS_FS") ''
+              mount -t configfs configfs -o nosuid,noexec,nodev /sys/kernel/config
+            ''}
             ${optionalString (config.boot.kernel.config.isYes "DEBUG_FS_ALLOW_ALL") ''
               mount -t debugfs debugfs -o nosuid,noexec,nodev /sys/kernel/debug
             ''}
@@ -364,13 +368,11 @@ in
     {
       boot.requiredKernelConfig = [
         "BLK_DEV_LOOP"
-        "CONFIGFS_FS"
         "DEVTMPFS_MOUNT"
         "EROFS_FS"
         "EROFS_FS_ZIP_LZMA"
         "OVERLAY_FS"
         "RD_XZ"
-        "UNIX98_PTYS"
       ];
     }
     {
