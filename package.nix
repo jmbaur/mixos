@@ -15,19 +15,22 @@ stdenvNoCC.mkDerivation {
   buildCommand = ''
     mkdir -p $out
 
+    export ZIG_GLOBAL_CACHE_DIR=$TEMPDIR
+
+    zig_args=("-j$NIX_BUILD_CORES" "--color" "off")
     zig_build_exe_args=(
-      "-j$NIX_BUILD_CORES"
-      "--color" "off"
+      "''${zig_args[@]}"
       "-femit-bin=$out/init"
       "-mcpu" "baseline"
       "-ofmt=elf"
       "-fstrip"
       "-O" "ReleaseSmall"
       "-target" "${stdenvNoCC.hostPlatform.qemuArch}-linux"
-      "${./mixos-rdinit.zig}"
     )
 
-    HOME=$TMPDIR zig build-exe ''${zig_build_exe_args[@]}
+    zig test ''${zig_args[@]} ${./mixos-rdinit.zig}
+    zig build-exe ''${zig_build_exe_args[@]} ${./mixos-rdinit.zig}
+    rm -f $out/*.o
   '';
 
   meta.platforms = lib.platforms.linux;

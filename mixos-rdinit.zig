@@ -93,11 +93,17 @@ fn find_cmdline(cmdline: []const u8, want_key: []const u8) ?[]const u8 {
         const value = split.next() orelse continue;
 
         if (std.mem.eql(u8, key, want_key)) {
-            return value;
+            return std.mem.trim(u8, value, &std.ascii.whitespace);
         }
     }
 
     return null;
+}
+
+test "find_cmdline" {
+    try std.testing.expectEqual(null, find_cmdline("foo", ""));
+    try std.testing.expectEqualStrings("1", find_cmdline("foo=1", "foo") orelse unreachable);
+    try std.testing.expectEqualStrings("1", find_cmdline("foo=1 \t\n", "foo") orelse unreachable);
 }
 
 fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
