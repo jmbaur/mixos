@@ -1,3 +1,4 @@
+*.o
 /.direnv
-/target
+mixos-rdinit
 result*

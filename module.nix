@@ -470,15 +470,11 @@ in
         compressor = "xz";
         contents = [
           {
-            source = "${pkgs.busybox}/bin";
-            target = "/bin";
-          }
-          {
             source = config.system.build.rootfs;
             target = "/rootfs";
           }
           {
-            source = lib.getExe pkgs.mixos-rdinit;
+            source = "${pkgs.mixos-rdinit}/init";
             target = "/init";
           }
         ];

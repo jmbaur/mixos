@@ -7,7 +7,7 @@
 
     mixosConfigurations.test = inputs.self.lib.mixosSystem {
       modules = [
-        ./mixos-configuration.nix
+        ./test/mixos-configuration.nix
         { nixpkgs.nixpkgs = inputs.nixpkgs; }
       ];
     };
@@ -16,11 +16,6 @@
       let
         pkgs = inputs.nixpkgs.legacyPackages.x86_64-linux;
       in
-      pkgs.mkShell {
-        packages = [
-          pkgs.rustc
-          pkgs.cargo
-        ];
-      };
+      pkgs.mkShell { packages = [ pkgs.zig_0_14 ]; };
   };
 }
