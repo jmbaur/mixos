@@ -246,11 +246,19 @@ in
     };
 
     state = {
-      enable = mkEnableOption "state";
-      fsType = mkOption { type = types.str; };
+      enable = mkEnableOption "persistence of state";
+      fsType = mkOption {
+        type = types.str;
+        description = ''
+          The filesystem type of the state device.
+        '';
+      };
       options = mkOption {
         type = types.listOf types.str;
         default = [ ];
+        description = ''
+          The mount options to use when mounting the state device.
+        '';
       };
     };
 
