@@ -344,6 +344,10 @@ in
             # Ensure basic state directories exist
             mkdir -p /var/log
             mkdir -p /var/spool/cron/crontabs
+
+            if [[ -f /etc/hostname ]]; then
+              hostname -F /etc/hostname
+            fi
           '';
         };
 
