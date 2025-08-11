@@ -217,6 +217,10 @@ pub fn main() noreturn {
         std.debug.panic("initrd failed: {}", .{err});
     };
 
+    if (!arena.reset(.retain_capacity)) {
+        log.warn("failed to reset arena", .{});
+    }
+
     const err = std.process.execv(allocator, &.{init});
     std.debug.panic("execv /init failed: {}", .{err});
 }
