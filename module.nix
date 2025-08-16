@@ -10,7 +10,7 @@ let
 
   inherit (lib)
     attrNames
-    concatMapStringsSep
+    concatLines
     escapeShellArgs
     filterAttrs
     isFunction
@@ -282,12 +282,27 @@ in
   config = mkMerge [
     {
       assertions = [
-        {
-          assertion = lib.all config.boot.kernel.config.isYes config.boot.requiredKernelConfig;
-          message = "Kernel configuration is not satisfied, please ensure the following options are configured: ${
-            concatMapStringsSep " " (opt: "${opt}=y") config.boot.requiredKernelConfig
-          }";
-        }
+        (
+          let
+            missing = lib.filter (
+              kconfigOption: !config.boot.kernel.config.isYes kconfigOption
+            ) config.boot.requiredKernelConfig;
+          in
+          {
+            assertion = missing == [ ];
+            message = ''
+              Kernel configuration is not satisfied, please ensure the configuration has the following:
+
+              ${concatLines (
+                map (
+                  opt:
+                  # Assertion output is more readable when these are indented
+                  # to four spaces each.
+                  "    CONFIG_${opt}=y"
+                ) missing
+              )}'';
+          }
+        )
       ];
     }
     {
