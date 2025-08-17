@@ -360,9 +360,15 @@ in
             mkdir -p /var/log
             mkdir -p /var/spool/cron/crontabs
 
+            # Setup hostname
             if [[ -f /etc/hostname ]]; then
               hostname -F /etc/hostname
             fi
+
+            ${optionalString (config.boot.kernel.config.isYes "NET") ''
+              # Setup loopback adapter
+              ip link set lo up
+            ''}
           '';
         };
 
