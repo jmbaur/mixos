@@ -133,7 +133,7 @@ in
           kernel:
           kernel.overrideAttrs (
             old:
-            optionalAttrs (old.passthru.config.isYes "MODULES") {
+            optionalAttrs (!(lib.elem "modules" old.outputs) && old.passthru.config.isYes "MODULES") {
               outputs = old.outputs ++ [ "modules" ];
               postInstall = ''
                 unset modules
