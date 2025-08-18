@@ -13,8 +13,7 @@
   boot.kernel = pkgs.linuxKernel.manualConfig {
     inherit (pkgs.linux_6_15) src version;
     configfile = ./kernel.config;
-    # TODO(jared): linuxKernel.manualConfig should be capable of parsing the
-    # config file provided at eval time without incurring IFD.
+    # TODO(jared): Remove when we have https://github.com/NixOS/nixpkgs/pull/434608
     allowImportFromDerivation = false;
     config = lib.listToAttrs (
       map

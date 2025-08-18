@@ -123,7 +123,7 @@ in
         description = ''
           A kernel packaged from the nixpkgs Linux kernel build recipe.
         '';
-        # TODO(jared): remove once https://github.com/NixOS/nixpkgs/pull/423933 is merge
+        # TODO(jared): Remove once https://github.com/NixOS/nixpkgs/pull/423933 is in a stable release.
         #
         # This allows for the nix output containing the kernel image to be
         # separated from the nix output containing the kernel modules, meaning we
