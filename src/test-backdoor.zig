@@ -33,9 +33,7 @@ fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connecti
         .{},
     );
 
-    var buffered_writer = std.io.bufferedWriter(conn.stream.writer());
-    try buffered_writer.writer().writeAll(out);
-    try buffered_writer.flush();
+    try conn.stream.writeAll(out);
 }
 
 pub fn main() !void {
@@ -43,6 +41,7 @@ pub fn main() !void {
     defer arena.deinit();
 
     var args = std.process.args();
+    _ = args.next() orelse std.debug.panic("missing argv[0]", .{});
     const port = if (args.next()) |arg| try std.fmt.parseInt(u16, arg, 10) else 8000;
 
     const addr = try std.net.Address.parseIp("::", port);
