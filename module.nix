@@ -521,7 +521,7 @@ in
         compressor = "xz";
         contents = [
           {
-            source = lib.getExe' pkgs.mixos "mixos-init";
+            source = lib.getExe' pkgs.mixos "mixos-rdinit";
             target = "/init";
           }
           {

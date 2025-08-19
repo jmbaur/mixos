@@ -6,7 +6,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const mixos_init_exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/init.zig"),
+        .root_source_file = b.path("src/rdinit.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const mixos_init = b.addExecutable(.{
-        .name = "mixos-init",
+        .name = "mixos-rdinit",
         .root_module = mixos_init_exe_mod,
     });
 
