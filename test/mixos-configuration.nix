@@ -48,6 +48,10 @@
     process = "/bin/udhcpc -f -S";
   };
 
+  etc."ntp.conf".source = pkgs.writeText "ntp.conf" ''
+    server time.nist.gov
+  '';
+
   system.build.test = pkgs.pkgsBuildBuild.callPackage (
     { writeShellApplication, qemu }:
     writeShellApplication {

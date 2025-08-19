@@ -1,4 +1,5 @@
 {
+  options,
   config,
   lib,
   pkgs,
@@ -9,14 +10,19 @@ let
   inherit (lib.asserts) checkAssertWarn;
 
   inherit (lib)
+    any
     attrNames
     concatLines
     escapeShellArgs
     filterAttrs
+    hasAttr
+    id
     isFunction
     mapAttrs
     mergeOneOption
+    mkDefault
     mkEnableOption
+    mkIf
     mkMerge
     mkOption
     mkOptionType
@@ -415,6 +421,11 @@ in
           process = "/bin/crond -f -S";
           deps = [ "syslog" ];
         };
+
+        ntpd = mkIf (any id (map (hasAttr "ntp.conf") options.etc.definitions)) (mkDefault {
+          action = "respawn";
+          process = "/bin/ntpd -n";
+        });
 
         test-backdoor = {
           enable = config.mixos.testing.enable;
