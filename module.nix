@@ -338,6 +338,14 @@ in
           (textClosureMap lib.id inittabTextAttrs (attrNames inittabTextAttrs) + "\n")
         );
         "mdev.conf".source = pkgs.writeText "mixos-mdev" "";
+        "hosts".source = mkIf (config.boot.kernel.config.isYes "NET") (
+          mkDefault (
+            pkgs.writeText "etc-hosts" ''
+              127.0.0.1 localhost
+              ::1 localhost
+            ''
+          )
+        );
       };
 
       init = {
@@ -537,6 +545,9 @@ in
           config.boot.kernel
           config.system.build.initrd
         ];
+        postBuild = ''
+          ln -sf ${pkgs.stdenv.hostPlatform.linux-kernel.target} $out/kernel
+        '';
       };
     }
   ];

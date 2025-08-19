@@ -1,21 +1,19 @@
 {
-  config,
   lib,
   pkgs,
   ...
 }:
-{
-  nixpkgs = {
-    buildPlatform = "x86_64-linux";
-    hostPlatform.config = "aarch64-unknown-linux-musl";
-  };
 
+let
+  configfile = ./${pkgs.stdenv.hostPlatform.linuxArch}.config;
+in
+{
   mixos.testing.enable = true;
 
   boot.kernel = pkgs.linuxKernel.manualConfig {
     inherit (pkgs.linux_6_15) src version;
-    configfile = ./kernel.config;
     # TODO(jared): Remove when we have https://github.com/NixOS/nixpkgs/pull/434608
+    inherit configfile;
     allowImportFromDerivation = false;
     config = lib.listToAttrs (
       map
@@ -31,14 +29,19 @@
         )
         (
           lib.filter (line: !(lib.hasPrefix "#" line || line == "")) (
-            lib.splitString "\n" (builtins.readFile ./kernel.config)
+            lib.splitString "\n" (builtins.readFile configfile)
           )
         )
     );
   };
 
   init.shell = {
-    tty = "ttyAMA0";
+    tty =
+      {
+        arm64 = "ttyAMA0";
+        x86_64 = "ttyS0";
+      }
+      .${pkgs.stdenv.hostPlatform.linuxArch} or "console";
     action = "askfirst";
     process = "/bin/sh";
   };
@@ -51,17 +54,4 @@
   etc."ntp.conf".source = pkgs.writeText "ntp.conf" ''
     server time.nist.gov
   '';
-
-  system.build.test = pkgs.pkgsBuildBuild.callPackage (
-    { writeShellApplication, qemu }:
-    writeShellApplication {
-      name = "mixos-test";
-      runtimeInputs = [ qemu ];
-      # TODO(jared): Make the qemu options generic to the host platform.
-      text = ''
-        qemu-system-${pkgs.stdenv.hostPlatform.qemuArch} -M virt -m 2G -cpu cortex-a53 -kernel ${config.system.build.all}/Image -initrd ${config.system.build.all}/initrd -nographic -append debug \
-          -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::8000-:8000
-      '';
-    }
-  ) { };
 }

@@ -1,4 +1,6 @@
 {
+  description = "MixOS, a Minimal Nix OS";
+
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
   outputs = inputs: {
@@ -31,12 +33,49 @@
         ++ modules;
       };
 
-    mixosConfigurations.test = inputs.self.lib.mixosSystem {
-      modules = [
-        ./test/mixos-configuration.nix
-        { nixpkgs.nixpkgs = inputs.nixpkgs; }
-      ];
-    };
+    apps = inputs.nixpkgs.lib.mapAttrs (
+      system: pkgs:
+      let
+        mixosConfig = inputs.self.lib.mixosSystem {
+          modules = [
+            ./test/mixos-configuration.nix
+            {
+              nixpkgs.nixpkgs = inputs.nixpkgs;
+              nixpkgs.buildPlatform = system;
+              nixpkgs.hostPlatform = builtins.replaceStrings [ "darwin" ] [ "linux" ] system;
+            }
+          ];
+        };
+        mixosPkgs = mixosConfig._module.args.pkgs;
+        qemuOpts =
+          {
+            x86_64 = [
+              "-machine"
+              "q35"
+            ];
+            arm64 = [
+              "-machine"
+              "virt"
+              "-cpu"
+              "cortex-a53"
+            ];
+          }
+          .${mixosPkgs.stdenv.hostPlatform.linuxArch} or [ ];
+      in
+      {
+        default = {
+          type = "app";
+          meta.description = "Launch MixOS in a VM";
+          program = toString (
+            pkgs.writeShellScript "mixos-test" ''
+              ${pkgs.qemu}/bin/qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} ${toString qemuOpts} \
+                -m 2G -nographic -kernel ${mixosConfig.config.system.build.all}/kernel -initrd ${mixosConfig.config.system.build.all}/initrd -append debug \
+                -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::8000-:8000
+            ''
+          );
+        };
+      }
+    ) inputs.self.legacyPackages;
 
     devShells = inputs.nixpkgs.lib.mapAttrs (_: pkgs: {
       default = pkgs.mkShell {
