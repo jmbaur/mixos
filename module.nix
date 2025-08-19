@@ -277,6 +277,13 @@ in
     mixos = {
       testing = {
         enable = mkEnableOption "the mixos test backdoor service";
+        port = mkOption {
+          type = types.ints.positive;
+          default = 8000;
+          description = ''
+            Port to run test backdoor service on.
+          '';
+        };
       };
     };
   };
@@ -412,7 +419,10 @@ in
         test-backdoor = {
           enable = config.mixos.testing.enable;
           action = "respawn";
-          process = lib.getExe' pkgs.mixos "mixos-test-backdoor";
+          process = toString [
+            (lib.getExe' pkgs.mixos "mixos-test-backdoor")
+            config.mixos.testing.port
+          ];
         };
       };
     }

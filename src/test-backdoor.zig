@@ -42,7 +42,10 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    const addr = try std.net.Address.parseIp("::", 8000);
+    var args = std.process.args();
+    const port = if (args.next()) |arg| try std.fmt.parseInt(u16, arg, 10) else 8000;
+
+    const addr = try std.net.Address.parseIp("::", port);
     std.log.info("mixos test backdoor server listening on {}", .{addr});
 
     var server = try addr.listen(.{});
