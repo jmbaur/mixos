@@ -1,4 +1,4 @@
-*.o
 /.direnv
-mixos-rdinit
+/.zig-cache
+/zig-out
 result*

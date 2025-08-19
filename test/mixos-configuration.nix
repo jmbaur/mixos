@@ -10,6 +10,8 @@
     hostPlatform.config = "aarch64-unknown-linux-musl";
   };
 
+  mixos.testing.enable = true;
+
   boot.kernel = pkgs.linuxKernel.manualConfig {
     inherit (pkgs.linux_6_15) src version;
     configfile = ./kernel.config;

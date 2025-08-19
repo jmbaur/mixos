@@ -277,6 +277,12 @@ in
         };
       };
     };
+
+    mixos = {
+      testing = {
+        enable = mkEnableOption "the mixos test backdoor service";
+      };
+    };
   };
 
   config = mkMerge [
@@ -306,12 +312,6 @@ in
       ];
     }
     {
-      nixpkgs.overlays = [
-        (final: _: {
-          mixos-rdinit = final.callPackage ./package.nix { };
-        })
-      ];
-
       _module.args.pkgs = import config.nixpkgs.nixpkgs {
         localSystem = lib.systems.elaborate config.nixpkgs.buildPlatform;
         crossSystem = lib.systems.elaborate config.nixpkgs.hostPlatform;
@@ -409,6 +409,12 @@ in
           process = "/bin/crond -f -S";
           deps = [ "syslog" ];
         };
+
+        test-backdoor = {
+          enable = config.mixos.testing.enable;
+          action = "respawn";
+          process = lib.getExe' pkgs.mixos "mixos-test-backdoor";
+        };
       };
     }
     {
@@ -495,12 +501,12 @@ in
         compressor = "xz";
         contents = [
           {
-            source = config.system.build.rootfs;
-            target = "/rootfs";
+            source = lib.getExe' pkgs.mixos "mixos-init";
+            target = "/init";
           }
           {
-            source = "${pkgs.mixos-rdinit}/init";
-            target = "/init";
+            source = config.system.build.rootfs;
+            target = "/rootfs";
           }
         ];
       };

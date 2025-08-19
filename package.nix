@@ -5,32 +5,53 @@
 }:
 
 stdenvNoCC.mkDerivation {
-  pname = "mixos-rdinit";
+  pname = "mixos";
   version = "0.1.0";
 
   depsBuildBuild = [ zig_0_14 ];
 
-  # TODO(jared): Allow for stack traces with ReleaseSmall. See
-  # https://github.com/ziglang/zig/issues/18520
-  buildCommand = ''
-    mkdir -p $out
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./build.zig
+      ./build.zig.zon
+      ./src
+    ];
+  };
 
+  __structuredAttrs = true;
+
+  zigBuildFlags = [
+    "--color off"
+    "-Doptimize=ReleaseSmall"
+    "-Dcpu=baseline"
+    "-Dtarget=${stdenvNoCC.hostPlatform.qemuArch}-${stdenvNoCC.hostPlatform.parsed.kernel.name}"
+  ];
+
+  doCheck = true;
+
+  configurePhase = ''
+    runHook preConfigure
     export ZIG_GLOBAL_CACHE_DIR=$TEMPDIR
+    runHook postConfigure
+  '';
 
-    zig_args=("-j$NIX_BUILD_CORES" "--color" "off")
-    zig_build_exe_args=(
-      "''${zig_args[@]}"
-      "-femit-bin=$out/init"
-      "-mcpu" "baseline"
-      "-ofmt=elf"
-      "-fstrip"
-      "-O" "ReleaseSmall"
-      "-target" "${stdenvNoCC.hostPlatform.qemuArch}-linux"
-    )
+  buildPhase = ''
+    runHook preBuild
+    zig build -j$NIX_BUILD_CORES ''${zigBuildFlags[@]}
+    runHook postBuild
+  '';
 
-    zig test ''${zig_args[@]} ${./mixos-rdinit.zig}
-    zig build-exe ''${zig_build_exe_args[@]} ${./mixos-rdinit.zig}
-    rm -f $out/*.o
+  checkPhase = ''
+    runHook preCheck
+    zig build test -j$NIX_BUILD_CORES ''${zigBuildFlags[@]}
+    runHook postCheck
+  '';
+
+  installPhase = ''
+    runHook preInstall
+    zig build install --prefix $out ''${zigBuildFlags[@]}
+    runHook postInstall
   '';
 
   meta.platforms = lib.platforms.linux;
