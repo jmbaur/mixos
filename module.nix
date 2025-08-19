@@ -157,10 +157,6 @@ in
         types.submodule {
           options = {
             source = mkOption { type = types.path; };
-            mode = mkOption {
-              type = types.nonEmptyStr;
-              default = "0400";
-            };
           };
         }
       );
@@ -456,7 +452,7 @@ in
           ${lib.concatLines (
             lib.mapAttrsToList (
               pathUnderEtc:
-              { source, mode }:
+              { source }:
               ''
                 mkdir -p $(dirname $out/etc/${pathUnderEtc})
                 ln -sf ${source} $out/etc/${pathUnderEtc}
