@@ -315,7 +315,10 @@ in
       };
     }
     {
-      bin = [ pkgs.busybox ];
+      bin = [
+        pkgs.busybox
+        pkgs.mixos
+      ];
 
       etc = {
         "inittab".source = pkgs.writeText "mixos-inittab" (

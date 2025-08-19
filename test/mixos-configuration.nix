@@ -43,6 +43,11 @@
     process = "/bin/sh";
   };
 
+  init.dhcp = {
+    action = "respawn";
+    process = "/bin/udhcpc -f -S";
+  };
+
   system.build.test = pkgs.pkgsBuildBuild.callPackage (
     { writeShellApplication, qemu }:
     writeShellApplication {
@@ -50,7 +55,8 @@
       runtimeInputs = [ qemu ];
       # TODO(jared): Make the qemu options generic to the host platform.
       text = ''
-        qemu-system-${pkgs.stdenv.hostPlatform.qemuArch} -M virt -m 2G -cpu cortex-a53 -kernel ${config.system.build.all}/Image -initrd ${config.system.build.all}/initrd -nographic -append debug
+        qemu-system-${pkgs.stdenv.hostPlatform.qemuArch} -M virt -m 2G -cpu cortex-a53 -kernel ${config.system.build.all}/Image -initrd ${config.system.build.all}/initrd -nographic -append debug \
+          -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::8000-:8000
       '';
     }
   ) { };

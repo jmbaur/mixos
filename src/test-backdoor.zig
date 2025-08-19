@@ -1,12 +1,16 @@
 const std = @import("std");
 
+const std_options: std.Options = .{ .log_level = .debug };
+
 const ClientMessage = struct {
     command: []const []const u8,
 };
 
-const ServerMessage = union(enum) {
-    err: []const u8,
-    res: std.process.Child.RunResult,
+const ServerMessage = struct {
+    response: union(enum) {
+        success: std.process.Child.RunResult,
+        failure: []const u8,
+    },
 };
 
 fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connection) !void {
@@ -19,17 +23,19 @@ fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connecti
         .argv = message.value.command,
     });
 
-    if (result) |run_result| {
-        const response = try std.json.stringifyAlloc(allocator, ServerMessage{
-            .res = run_result,
-        }, .{});
-        try conn.stream.writeAll(response);
-    } else |err| {
-        const response = try std.json.stringifyAlloc(allocator, ServerMessage{
-            .err = try std.fmt.allocPrint(allocator, "{}", .{err}),
-        }, .{});
-        try conn.stream.writeAll(response);
-    }
+    const out = if (result) |run_result| try std.json.stringifyAlloc(
+        allocator,
+        ServerMessage{ .response = .{ .success = run_result } },
+        .{},
+    ) else |err| try std.json.stringifyAlloc(
+        allocator,
+        ServerMessage{ .response = .{ .failure = try std.fmt.allocPrint(allocator, "{}", .{err}) } },
+        .{},
+    );
+
+    var buffered_writer = std.io.bufferedWriter(conn.stream.writer());
+    try buffered_writer.writer().writeAll(out);
+    try buffered_writer.flush();
 }
 
 pub fn main() !void {
