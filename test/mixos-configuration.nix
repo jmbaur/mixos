@@ -12,27 +12,7 @@ in
 
   boot.kernel = pkgs.linuxKernel.manualConfig {
     inherit (pkgs.linux_6_15) src version;
-    # TODO(jared): Remove when we have https://github.com/NixOS/nixpkgs/pull/434608
     inherit configfile;
-    allowImportFromDerivation = false;
-    config = lib.listToAttrs (
-      map
-        (
-          line:
-          let
-            match = lib.match "(.*)=\"?(.*)\"?" line;
-          in
-          {
-            name = lib.elemAt match 0;
-            value = lib.elemAt match 1;
-          }
-        )
-        (
-          lib.filter (line: !(lib.hasPrefix "#" line || line == "")) (
-            lib.splitString "\n" (builtins.readFile configfile)
-          )
-        )
-    );
   };
 
   init.shell = {
