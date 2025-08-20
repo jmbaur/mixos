@@ -72,8 +72,8 @@ if __name__ == "__main__":
     with Machine((sys.argv[1], int(sys.argv[2]))) as machine:
         response = machine.run_command(sys.argv[3:])
         if isinstance(response, Success):
-            print("term:", response.success.term)
-            print("stdout:\n", response.success.stdout.strip())
-            print("stderr:\n", response.success.stderr.strip())
+            print("term: {}".format(response.success.term))
+            print("\nstdout:\n{}".format(response.success.stdout.strip()))
+            print("\nstderr:\n{}".format(response.success.stderr.strip()))
         else:
             print("failure:", response.failure)
