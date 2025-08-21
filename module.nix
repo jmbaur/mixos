@@ -365,6 +365,10 @@ in
             ${optionalString (config.boot.kernel.config.isYes "DEBUG_FS_ALLOW_ALL") ''
               mount -t debugfs debugfs -o nosuid,noexec,nodev /sys/kernel/debug
             ''}
+            ${optionalString (config.boot.kernel.config.isYes "SHMEM") ''
+              mkdir /dev/shm
+              mount -t tmpfs tmpfs /dev/shm
+            ''}
             mount -t tmpfs tmpfs /tmp
             mkdir -p /tmp/.etc/work /tmp/.etc/upper
             mount -t overlay overlay -o lowerdir=/etc,upperdir=/tmp/.etc/upper,workdir=/tmp/.etc/work /etc 
@@ -450,6 +454,7 @@ in
         "EROFS_FS_ZIP_LZMA"
         "OVERLAY_FS"
         "RD_XZ"
+        "TMPFS"
       ];
     }
     {
