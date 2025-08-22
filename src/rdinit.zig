@@ -185,7 +185,12 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
     }
 
     log.debug("removing remnants of initrd rootfs", .{});
-    std.fs.deleteFileAbsolute("/init") catch {};
+    if (std.fs.cwd().realpathAlloc(allocator, "/init")) |init_realpath| {
+        std.fs.cwd().deleteFile(init_realpath) catch {};
+        if (!std.mem.eql(u8, init_realpath, "/init")) {
+            std.fs.deleteFileAbsolute("/init") catch {};
+        }
+    } else |_| {}
 
     log.debug("moving pseudofilesystems into final root filesystem", .{});
     try mount("/dev", "/sysroot/dev", "", system.MS.MOVE, 0);
