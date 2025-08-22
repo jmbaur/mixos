@@ -505,6 +505,7 @@ in
         runCommand "mixos.erofs"
           {
             __structuredAttrs = true;
+            unsafeDiscardReferences.out = true;
 
             exportReferencesGraph.closure = [ config.system.build.root ];
 
