@@ -367,9 +367,9 @@ in
             ''}
             ${optionalString (config.boot.kernel.config.isYes "SHMEM") ''
               mkdir /dev/shm
-              mount -t tmpfs tmpfs /dev/shm
+              mount -t tmpfs tmpfs -o nosuid,nodev /dev/shm
             ''}
-            mount -t tmpfs tmpfs /tmp
+            mount -t tmpfs tmpfs -o nosuid,nodev /tmp
             mkdir -p /tmp/.etc/work /tmp/.etc/upper
             mount -t overlay overlay -o lowerdir=/etc,upperdir=/tmp/.etc/upper,workdir=/tmp/.etc/work /etc 
 

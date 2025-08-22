@@ -3,87 +3,131 @@
 
   inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
 
-  outputs = inputs: {
-    overlays.default = final: prev: {
-      mixos = final.callPackage ./package.nix { };
-      python3 = prev.python3.override {
-        packageOverrides = pyfinal: _: {
-          mixos-testing-library = pyfinal.callPackage ./mixos-testing-library/package.nix { };
+  outputs =
+    inputs:
+    let
+      inherit (inputs.nixpkgs.lib)
+        evalModules
+        genAttrs
+        mapAttrs
+        optionals
+        ;
+    in
+    {
+      overlays.default = final: prev: {
+        mixos = final.callPackage ./package.nix { };
+        python3 = prev.python3.override {
+          packageOverrides = pyfinal: _: {
+            mixos-testing-library = pyfinal.callPackage ./mixos-testing-library/package.nix { };
+          };
         };
       };
-    };
 
-    legacyPackages =
-      inputs.nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ]
-        (
-          system:
-          import inputs.nixpkgs {
-            inherit system;
-            overlays = [ inputs.self.overlays.default ];
-          }
-        );
+      legacyPackages = genAttrs [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ] (
+        system:
+        import inputs.nixpkgs {
+          inherit system;
+          overlays = [ inputs.self.overlays.default ];
+        }
+      );
 
-    lib.mixosSystem =
-      { modules }:
-      inputs.nixpkgs.lib.evalModules {
-        modules = [
-          ./module.nix
-          { nixpkgs.overlays = [ inputs.self.overlays.default ]; }
-        ]
-        ++ modules;
-      };
-
-    apps = inputs.nixpkgs.lib.mapAttrs (
-      system: pkgs:
-      let
-        mixosConfig = inputs.self.lib.mixosSystem {
+      lib.mixosSystem =
+        { modules }:
+        evalModules {
           modules = [
-            ./test/mixos-configuration.nix
+            ./module.nix
+            { nixpkgs.overlays = [ inputs.self.overlays.default ]; }
+          ]
+          ++ modules;
+        };
+
+      apps = mapAttrs (
+        system: pkgs:
+        let
+          mixosConfig = inputs.self.lib.mixosSystem {
+            modules = [
+              ./test/mixos-configuration.nix
+              {
+                nixpkgs.nixpkgs = inputs.nixpkgs;
+                nixpkgs.buildPlatform = system;
+                nixpkgs.hostPlatform = builtins.replaceStrings [ "darwin" ] [ "linux" ] system;
+              }
+            ];
+          };
+          mixosPkgs = mixosConfig._module.args.pkgs;
+          qemuOpts =
             {
-              nixpkgs.nixpkgs = inputs.nixpkgs;
-              nixpkgs.buildPlatform = system;
-              nixpkgs.hostPlatform = builtins.replaceStrings [ "darwin" ] [ "linux" ] system;
+              x86_64 = [
+                "-machine"
+                "q35"
+              ];
+              arm64 = [
+                "-machine"
+                "virt"
+                "-cpu"
+                "cortex-a53"
+              ];
             }
+            .${mixosPkgs.stdenv.hostPlatform.linuxArch} or [ ];
+          kernelParams = [
+            "debug"
+          ]
+          ++ optionals mixosPkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ];
+        in
+        {
+          default = {
+            type = "app";
+            meta.description = "Launch MixOS in a VM";
+            program = toString (
+              pkgs.writeShellScript "mixos-test" ''
+                ${pkgs.qemu}/bin/qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} ${toString qemuOpts} \
+                  -m 2G -nographic -kernel ${mixosConfig.config.system.build.all}/kernel -initrd ${mixosConfig.config.system.build.all}/initrd -append "${toString kernelParams}" \
+                  -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::8000-:8000
+              ''
+            );
+          };
+        }
+      ) inputs.self.legacyPackages;
+
+      devShells = mapAttrs (_: pkgs: {
+        default = pkgs.mkShell {
+          packages = with pkgs; [
+            (python3.withPackages (p: [ p.mixos-testing-library ]))
+            zig_0_14
           ];
         };
-        mixosPkgs = mixosConfig._module.args.pkgs;
-        qemuOpts =
-          {
-            x86_64 = [
-              "-machine"
-              "q35"
-            ];
-            arm64 = [
-              "-machine"
-              "virt"
-              "-cpu"
-              "cortex-a53"
-            ];
-          }
-          .${mixosPkgs.stdenv.hostPlatform.linuxArch} or [ ];
-      in
-      {
-        default = {
-          type = "app";
-          meta.description = "Launch MixOS in a VM";
-          program = toString (
-            pkgs.writeShellScript "mixos-test" ''
-              ${pkgs.qemu}/bin/qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} ${toString qemuOpts} \
-                -m 2G -nographic -kernel ${mixosConfig.config.system.build.all}/kernel -initrd ${mixosConfig.config.system.build.all}/initrd -append debug \
-                -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::8000-:8000
-            ''
-          );
-        };
-      }
-    ) inputs.self.legacyPackages;
+      }) inputs.self.legacyPackages;
 
-    devShells = inputs.nixpkgs.lib.mapAttrs (_: pkgs: {
-      default = pkgs.mkShell {
-        packages = with pkgs; [
-          (python3.withPackages (p: [ p.mixos-testing-library ]))
-          zig_0_14
-        ];
-      };
-    }) inputs.self.legacyPackages;
-  };
+      formatter = mapAttrs (
+        _: pkgs:
+        pkgs.treefmt.withConfig {
+          runtimeInputs = [
+            pkgs.nixfmt
+            pkgs.ruff
+            pkgs.zig_0_14
+          ];
+
+          settings = {
+            on-unmatched = "info";
+
+            formatter.nixfmt = {
+              command = "nixfmt";
+              includes = [ "*.nix" ];
+            };
+
+            formatter.ruff = {
+              command = "ruff";
+              options = [ "format" ];
+              includes = [ "*.py" ];
+            };
+
+            formatter.zig = {
+              command = "zig";
+              options = [ "fmt" ];
+              includes = [ "*.zig" ];
+            };
+          };
+        }
+      ) inputs.self.legacyPackages;
+    };
 }

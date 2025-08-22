@@ -2,38 +2,61 @@ const std = @import("std");
 
 const std_options: std.Options = .{ .log_level = .debug };
 
-const ClientMessage = struct {
+const Command = enum {
+    run_command,
+};
+
+const ClientMessage = union(Command) {
+    run_command: ClientCommandMessage,
+};
+
+const ClientCommandMessage = struct {
     command: []const []const u8,
 };
 
-const ServerMessage = struct {
-    response: union(enum) {
-        success: std.process.Child.RunResult,
-        failure: []const u8,
+const ServerMessage = union(enum) {
+    @"error": anyerror,
+    result: union(Command) {
+        run_command: std.process.Child.RunResult,
     },
 };
 
-fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connection) !void {
-    const raw_message = try conn.stream.reader().readUntilDelimiterAlloc(allocator, 0, std.math.maxInt(usize));
-
-    const message = try std.json.parseFromSlice(ClientMessage, allocator, raw_message, .{});
-
-    const result = std.process.Child.run(.{
+fn runCommand(allocator: std.mem.Allocator, conn: *std.net.Server.Connection, args: ClientCommandMessage) anyerror!void {
+    const run_result = try std.process.Child.run(.{
         .allocator = allocator,
-        .argv = message.value.command,
+        .argv = args.command,
     });
 
-    const out = if (result) |run_result| try std.json.stringifyAlloc(
+    const out = try std.json.stringifyAlloc(
         allocator,
-        ServerMessage{ .response = .{ .success = run_result } },
-        .{},
-    ) else |err| try std.json.stringifyAlloc(
-        allocator,
-        ServerMessage{ .response = .{ .failure = try std.fmt.allocPrint(allocator, "{}", .{err}) } },
+        ServerMessage{ .result = .{ .run_command = run_result } },
         .{},
     );
 
     try conn.stream.writeAll(out);
+}
+
+fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connection) !void {
+    const raw_message = try conn.stream.reader().readUntilDelimiterAlloc(allocator, 0, std.math.maxInt(usize));
+
+    const message = std.json.parseFromSlice(ClientMessage, allocator, raw_message, .{}) catch |err| {
+        const out = try std.json.stringifyAlloc(allocator, ServerMessage{
+            .@"error" = err,
+        }, .{});
+        try conn.stream.writeAll(out);
+        return;
+    };
+
+    const res = switch (message.value) {
+        .run_command => runCommand(allocator, conn, message.value.run_command),
+    };
+
+    res catch |err| {
+        const out = try std.json.stringifyAlloc(allocator, ServerMessage{
+            .@"error" = err,
+        }, .{});
+        try conn.stream.writeAll(out);
+    };
 }
 
 pub fn main() !void {
@@ -45,9 +68,10 @@ pub fn main() !void {
     const port = if (args.next()) |arg| try std.fmt.parseInt(u16, arg, 10) else 8000;
 
     const addr = try std.net.Address.parseIp("::", port);
-    std.log.info("mixos test backdoor server listening on {}", .{addr});
 
     var server = try addr.listen(.{});
+
+    std.log.info("mixos test backdoor server listening on {}", .{addr});
 
     while (true) {
         defer {

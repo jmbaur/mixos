@@ -19,22 +19,18 @@ class Unknown(BaseModel):
     Unknown: int
 
 
-class SuccessResponse(BaseModel):
+class ServerRunResultMessage(BaseModel):
     term: Exited | Signal | Stopped | Unknown = Field(union_mode="smart")
     stdout: str
     stderr: str
 
 
-class Success(BaseModel):
-    success: SuccessResponse
-
-
-class Failure(BaseModel):
-    failure: str
+class ServerRunCommandMessage(BaseModel):
+    run_command: ServerRunResultMessage
 
 
 class ServerMessage(BaseModel):
-    response: Success | Failure = Field(union_mode="smart")
+    result: ServerRunCommandMessage
 
 
 class Machine:
@@ -57,23 +53,27 @@ class Machine:
     def connect(self, address: tuple[str | None, int]):
         self.sock = socket.create_connection(address)
 
-    def run_command(self, command: list[str]) -> Success | Failure:
+    def recv_message(self, model):
         assert self.sock is not None
-        self.sock.send(json.dumps({"command": command}).encode())
-        self.sock.send("\0".encode())
         raw_response = self.sock.recv(1 << 16)
         response = json.loads(raw_response)
-        return ServerMessage.model_validate(response).response
+        if "error" in response:
+            raise Exception(response["error"])
+
+        return model.model_validate(response)
+
+    def run_command(self, command: list[str]):
+        assert self.sock is not None
+        self.sock.send(json.dumps({"run_command": {"command": command}}).encode())
+        self.sock.send("\0".encode())
+        return self.recv_message(ServerMessage)
 
 
 if __name__ == "__main__":
     import sys
 
     with Machine((sys.argv[1], int(sys.argv[2]))) as machine:
-        response = machine.run_command(sys.argv[3:])
-        if isinstance(response, Success):
-            print("term: {}".format(response.success.term))
-            print("\nstdout:\n{}".format(response.success.stdout.strip()))
-            print("\nstderr:\n{}".format(response.success.stderr.strip()))
-        else:
-            print("failure:", response.failure)
+        response = machine.run_command(sys.argv[3:]).result.run_command
+        print("term: {}".format(response.term))
+        print("\nstdout:\n{}".format(response.stdout.strip()))
+        print("\nstderr:\n{}".format(response.stderr.strip()))
