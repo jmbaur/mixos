@@ -1,6 +1,10 @@
 import json
 import socket
+import sys
 from pydantic import BaseModel, Field
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class Exited(BaseModel):
@@ -57,13 +61,22 @@ class Machine:
             self.sock.__exit__()
 
     def connect(self):
-        self.sock = socket.create_connection(
-            *self.create_connection_args, **self.create_connection_kwargs
-        )
+        retries = 0
+        while retries < 10:
+            try:
+                logger.debug("attempting connection")
+                self.sock = socket.create_connection(
+                    *self.create_connection_args, **self.create_connection_kwargs
+                )
+                break
+            except OSError:
+                logger.info("connection failed, retrying")
+                retries += 1
 
     def recv_message(self, model):
         assert self.sock is not None
         raw_response = self.sock.recv(1 << 16)
+        logger.debug("message from machine: {}".format(raw_response))
         response = json.loads(raw_response)
         if "error" in response:
             raise Exception(response["error"])
@@ -79,6 +92,8 @@ class Machine:
 
 if __name__ == "__main__":
     from argparse import ArgumentParser, REMAINDER
+
+    logging.basicConfig(level=logging.DEBUG)
 
     parser = ArgumentParser()
     parser.add_argument("ip", type=str, help="IP address of MixOS machine")
