@@ -37,26 +37,31 @@ fn runCommand(allocator: std.mem.Allocator, conn: *std.net.Server.Connection, ar
 }
 
 fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connection) !void {
-    const raw_message = try conn.stream.reader().readUntilDelimiterAlloc(allocator, 0, std.math.maxInt(usize));
+    while (true) {
+        const raw_message = conn.stream.reader().readUntilDelimiterAlloc(allocator, 0, std.math.maxInt(usize)) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
 
-    const message = std.json.parseFromSlice(ClientMessage, allocator, raw_message, .{}) catch |err| {
-        const out = try std.json.stringifyAlloc(allocator, ServerMessage{
-            .@"error" = err,
-        }, .{});
-        try conn.stream.writeAll(out);
-        return;
-    };
+        const message = std.json.parseFromSlice(ClientMessage, allocator, raw_message, .{}) catch |err| {
+            const out = try std.json.stringifyAlloc(allocator, ServerMessage{
+                .@"error" = err,
+            }, .{});
+            try conn.stream.writeAll(out);
+            return;
+        };
 
-    const res = switch (message.value) {
-        .run_command => runCommand(allocator, conn, message.value.run_command),
-    };
+        const res = switch (message.value) {
+            .run_command => runCommand(allocator, conn, message.value.run_command),
+        };
 
-    res catch |err| {
-        const out = try std.json.stringifyAlloc(allocator, ServerMessage{
-            .@"error" = err,
-        }, .{});
-        try conn.stream.writeAll(out);
-    };
+        res catch |err| {
+            const out = try std.json.stringifyAlloc(allocator, ServerMessage{
+                .@"error" = err,
+            }, .{});
+            try conn.stream.writeAll(out);
+        };
+    }
 }
 
 pub fn main() !void {
@@ -81,10 +86,12 @@ pub fn main() !void {
         var conn = try server.accept();
         defer conn.stream.close();
 
-        std.log.debug("new connection from {}", .{conn.address});
+        std.log.debug("connection started with {}", .{conn.address});
 
         handleConnection(arena.allocator(), &conn) catch |err| {
             std.log.err("connection handling failed: {}", .{err});
         };
+
+        std.log.debug("connection ended with {}", .{conn.address});
     }
 }
