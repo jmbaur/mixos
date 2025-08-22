@@ -1,8 +1,4 @@
-{
-  lib,
-  pkgs,
-  ...
-}:
+{ pkgs, ... }:
 
 let
   configfile = ./${pkgs.stdenv.hostPlatform.linuxArch}.config;

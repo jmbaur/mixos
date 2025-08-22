@@ -369,13 +369,16 @@ in
               mkdir /dev/shm
               mount -t tmpfs tmpfs -o nosuid,nodev /dev/shm
             ''}
+
             mount -t tmpfs tmpfs -o nosuid,nodev /tmp
-            mkdir -p /tmp/.etc/work /tmp/.etc/upper
-            mount -t overlay overlay -o lowerdir=/etc,upperdir=/tmp/.etc/upper,workdir=/tmp/.etc/work /etc 
 
             # Mount state directory and bind to /var
             ${mountState}
-            mount -o bind /state /var
+            mkdir -p /state/var
+            mount -o bind /state/var /var
+
+            mkdir -p /state/.etc/work /state/.etc/upper
+            mount -t overlay overlay -o lowerdir=/etc,upperdir=/state/.etc/upper,workdir=/state/.etc/work /etc
 
             # Ensure basic state directories exist
             mkdir -p /var/log
