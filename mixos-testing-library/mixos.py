@@ -34,12 +34,18 @@ class ServerMessage(BaseModel):
 
 
 class Machine:
-    def __init__(self, address: tuple[str | None, int]):
-        self.address = address
+    def __init__(self, *args, **kwargs):
+        """
+        Creates a new MixOS Machine
+
+        All args and kwargs are passed to `socket.create_connection()`.
+        """
+        self.create_connection_args = args
+        self.create_connection_kwargs = kwargs
         self.sock = None
 
     def __enter__(self):
-        self.connect(self.address)
+        self.connect()
         return self
 
     def __exit__(self, type, value, traceback):
@@ -50,8 +56,10 @@ class Machine:
         if self.sock is not None:
             self.sock.__exit__()
 
-    def connect(self, address: tuple[str | None, int]):
-        self.sock = socket.create_connection(address)
+    def connect(self):
+        self.sock = socket.create_connection(
+            *self.create_connection_args, **self.create_connection_kwargs
+        )
 
     def recv_message(self, model):
         assert self.sock is not None
@@ -70,10 +78,21 @@ class Machine:
 
 
 if __name__ == "__main__":
-    import sys
+    from argparse import ArgumentParser, REMAINDER
 
-    with Machine((sys.argv[1], int(sys.argv[2]))) as machine:
-        response = machine.run_command(sys.argv[3:]).result.run_command
+    parser = ArgumentParser()
+    parser.add_argument("ip", type=str, help="IP address of MixOS machine")
+    parser.add_argument("port", type=int, help="Port of MixOS testing backdoor")
+    parser.add_argument(
+        "command",
+        type=str,
+        nargs=REMAINDER,
+        help="Command to run on MixOS machine",
+    )
+    args = parser.parse_args()
+
+    with Machine(address=(args.ip, args.port), timeout=10) as machine:
+        response = machine.run_command(args.command).result.run_command
         print("term: {}".format(response.term))
         print("\nstdout:\n{}".format(response.stdout.strip()))
         print("\nstderr:\n{}".format(response.stderr.strip()))
