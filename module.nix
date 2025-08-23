@@ -141,8 +141,10 @@ in
             old:
             optionalAttrs (!(lib.elem "modules" old.outputs) && old.passthru.config.isYes "MODULES") {
               outputs = old.outputs ++ [ "modules" ];
-              postInstall = ''
+              preConfigure = ''
                 unset modules
+              '';
+              postInstall = ''
                 ${old.postInstall or ""}
                 modules=${placeholder "modules"}
                 mkdir -p $modules
