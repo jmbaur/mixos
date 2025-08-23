@@ -139,12 +139,12 @@ in
           kernel:
           kernel.overrideAttrs (
             old:
+            # We use the presence of the "modules" output in `old` as an indication of whether we are before or after https://github.com/NixOS/nixpkgs/commit/f71277d66db862f2cef133e9d63cb858f38d0a0c
             optionalAttrs (!(lib.elem "modules" old.outputs) && old.passthru.config.isYes "MODULES") {
               outputs = old.outputs ++ [ "modules" ];
+              makeFlags = (old.makeFlags or [ ]) ++ [ "--eval=undefine modules" ];
               postInstall = ''
-                unset modules
                 ${old.postInstall or ""}
-                modules=${placeholder "modules"}
                 mkdir -p $modules
                 mv $out/lib $modules
               '';
