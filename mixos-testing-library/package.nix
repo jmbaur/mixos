@@ -10,7 +10,7 @@ python.pkgs.buildPythonPackage {
   pyproject = true;
 
   build-system = [ python.pkgs.setuptools ];
-  dependencies = [ python.pkgs.pydantic ];
+  dependencies = [ python.pkgs.schema ];
 
   src = lib.fileset.toSource {
     root = ./.;

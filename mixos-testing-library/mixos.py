@@ -1,40 +1,25 @@
+from schema import Schema
+from typing import TypedDict
 import json
-import socket
-import sys
-from pydantic import BaseModel, Field
 import logging
+import socket
 
 logger = logging.getLogger(__name__)
 
 
-class Exited(BaseModel):
-    Exited: int
+run_command_schema = Schema(
+    {
+        "exit_code": int,
+        "stdout": str,
+        "stderr": str,
+    }
+)
 
 
-class Signal(BaseModel):
-    Signal: int
-
-
-class Stopped(BaseModel):
-    Stopped: int
-
-
-class Unknown(BaseModel):
-    Unknown: int
-
-
-class ServerRunResultMessage(BaseModel):
-    term: Exited | Signal | Stopped | Unknown = Field(union_mode="smart")
+class RunCommandResult(TypedDict):
+    exit_code: int
     stdout: str
     stderr: str
-
-
-class ServerRunCommandMessage(BaseModel):
-    run_command: ServerRunResultMessage
-
-
-class ServerMessage(BaseModel):
-    result: ServerRunCommandMessage
 
 
 class Machine:
@@ -73,7 +58,7 @@ class Machine:
                 logger.info("connection failed, retrying")
                 retries += 1
 
-    def recv_message(self, model):
+    def recv_message(self):
         assert self.sock is not None
         raw_response = self.sock.recv(1 << 16)
         logger.debug("message from machine: {}".format(raw_response))
@@ -81,13 +66,17 @@ class Machine:
         if "error" in response:
             raise Exception(response["error"])
 
-        return model.model_validate(response)
+        return response["result"]
 
-    def run_command(self, command: list[str]):
+    def run_command(self, command: list[str]) -> RunCommandResult:
         assert self.sock is not None
+        if len(command) == 0:
+            raise ValueError("empty command")
         self.sock.send(json.dumps({"run_command": {"command": command}}).encode())
         self.sock.send("\0".encode())
-        return self.recv_message(ServerMessage)
+        response = self.recv_message()
+        valid = run_command_schema.validate(response["run_command"])
+        return RunCommandResult(valid)
 
 
 if __name__ == "__main__":
@@ -107,7 +96,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     with Machine(address=(args.ip, args.port), timeout=10) as machine:
-        response = machine.run_command(args.command).result.run_command
-        print("term: {}".format(response.term))
-        print("\nstdout:\n{}".format(response.stdout.strip()))
-        print("\nstderr:\n{}".format(response.stderr.strip()))
+        response = machine.run_command(args.command)
+        print("exit_code: {}".format(response["exit_code"]))
+        print("\nstdout:\n{}".format(response["stdout"].strip()))
+        print("\nstderr:\n{}".format(response["stderr"].strip()))

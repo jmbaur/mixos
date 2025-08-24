@@ -14,10 +14,16 @@ const ClientCommandMessage = struct {
     command: []const []const u8,
 };
 
+const RunResult = struct {
+    exit_code: u32,
+    stdout: []u8,
+    stderr: []u8,
+};
+
 const ServerMessage = union(enum) {
     @"error": anyerror,
     result: union(Command) {
-        run_command: std.process.Child.RunResult,
+        run_command: RunResult,
     },
 };
 
@@ -29,7 +35,16 @@ fn runCommand(allocator: std.mem.Allocator, conn: *std.net.Server.Connection, ar
 
     const out = try std.json.stringifyAlloc(
         allocator,
-        ServerMessage{ .result = .{ .run_command = run_result } },
+        ServerMessage{ .result = .{ .run_command = .{
+            .exit_code = switch (run_result.term) {
+                .Exited => |exited| @as(u32, exited),
+                .Signal => |signal| signal,
+                .Stopped => |stopped| stopped,
+                .Unknown => |unknown| unknown,
+            },
+            .stderr = run_result.stderr,
+            .stdout = run_result.stdout,
+        } } },
         .{},
     );
 
