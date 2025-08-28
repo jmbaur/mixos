@@ -13,12 +13,19 @@ let
     any
     attrNames
     concatLines
+    concatStringsSep
+    elem
     escapeShellArgs
+    filter
     filterAttrs
+    getBin
+    getExe'
+    getOutput
     hasAttr
     id
     isFunction
     mapAttrs
+    mapAttrsToList
     mergeOneOption
     mkDefault
     mkEnableOption
@@ -28,14 +35,23 @@ let
     mkOptionType
     optionalAttrs
     optionalString
+    optionals
+    systems
     textClosureMap
     types
     ;
 
   bin = pkgs.buildEnv {
     name = "mixos-bin";
-    paths = map lib.getBin config.bin;
+    paths = map getBin config.bin;
     pathsToLink = [ "/bin" ];
+  };
+
+  firmware = pkgs.buildEnv {
+    name = "mixos-firmware";
+    paths = map pkgs.compressFirmwareXz config.boot.firmware;
+    pathsToLink = [ "/lib/firmware" ];
+    ignoreCollisions = true;
   };
 
   # <id>:<runlevels>:<action>:<process>
@@ -62,9 +78,9 @@ let
           "-t"
           "${config.state.fsType}"
         ]
-        ++ lib.optionals (config.state.options != [ ]) [
+        ++ optionals (config.state.options != [ ]) [
           "-o"
-          (lib.concatStringsSep "," config.state.options)
+          (concatStringsSep "," config.state.options)
         ]
         ++ [ config.state.what ]
       else
@@ -79,16 +95,16 @@ let
 in
 {
   options = {
-    assertions = lib.mkOption {
-      type = lib.types.listOf lib.types.unspecified;
+    assertions = mkOption {
+      type = types.listOf types.unspecified;
       internal = true;
       default = [ ];
     };
 
-    warnings = lib.mkOption {
+    warnings = mkOption {
       internal = true;
       default = [ ];
-      type = lib.types.listOf lib.types.str;
+      type = types.listOf types.str;
     };
 
     nixpkgs = {
@@ -109,7 +125,7 @@ in
 
       overlays = mkOption {
         default = [ ];
-        type = lib.types.listOf (mkOptionType {
+        type = types.listOf (mkOptionType {
           name = "nixpkgs-overlay";
           description = "nixpkgs overlay";
           check = isFunction;
@@ -139,7 +155,7 @@ in
           kernel:
           kernel.overrideAttrs (
             old:
-            optionalAttrs (!(lib.elem "modules" old.outputs) && old.passthru.config.isYes "MODULES") {
+            optionalAttrs (!(elem "modules" old.outputs) && old.passthru.config.isYes "MODULES") {
               outputs = old.outputs ++ [ "modules" ];
               preConfigure = ''
                 unset modules
@@ -152,6 +168,20 @@ in
               '';
             }
           );
+      };
+
+      firmware = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        description = ''
+          List of packages containing firmware files.  Such files
+          will be loaded automatically if the kernel asks for them
+          (i.e., when it has detected specific hardware that requires
+          firmware to function).  If multiple packages contain firmware
+          files with the same name, the first package in the list takes
+          precedence.  Note that you must rebuild your system if you add
+          files to any of these directories.
+        '';
       };
     };
 
@@ -301,7 +331,7 @@ in
       assertions = [
         (
           let
-            missing = lib.filter (
+            missing = filter (
               kconfigOption: !config.boot.kernel.config.isYes kconfigOption
             ) config.boot.requiredKernelConfig;
           in
@@ -324,8 +354,8 @@ in
     }
     {
       _module.args.pkgs = import config.nixpkgs.nixpkgs {
-        localSystem = lib.systems.elaborate config.nixpkgs.buildPlatform;
-        crossSystem = lib.systems.elaborate config.nixpkgs.hostPlatform;
+        localSystem = systems.elaborate config.nixpkgs.buildPlatform;
+        crossSystem = systems.elaborate config.nixpkgs.hostPlatform;
         inherit (config.nixpkgs) overlays config;
       };
     }
@@ -334,7 +364,7 @@ in
 
       etc = {
         "inittab".source = pkgs.writeText "mixos-inittab" (
-          (textClosureMap lib.id inittabTextAttrs (attrNames inittabTextAttrs) + "\n")
+          (textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs) + "\n")
         );
         "mdev.conf".source = pkgs.writeText "mixos-mdev" "";
         "hosts".source = mkIf (config.boot.kernel.config.isYes "NET") (
@@ -445,7 +475,7 @@ in
           enable = config.mixos.testing.enable;
           action = "respawn";
           process = toString [
-            (lib.getExe' pkgs.mixos "mixos-test-backdoor")
+            (getExe' pkgs.mixos "mixos-test-backdoor")
             config.mixos.testing.port
           ];
         };
@@ -460,6 +490,9 @@ in
         "OVERLAY_FS"
         "RD_XZ"
         "TMPFS"
+      ]
+      ++ optionals (config.boot.firmware != [ ]) [
+        "FW_LOADER_COMPRESS_XZ"
       ];
     }
     {
@@ -472,9 +505,12 @@ in
           # pid 1
           ln -sf ${bin}/bin/init $out/init
 
+          # kernel firmware
+          ln -sf ${firmware}/lib/firmware $out/lib/firmware
+
           # kernel modules
-          ${lib.optionalString (config.boot.kernel ? modules) ''
-            ln -sf ${lib.getOutput "modules" config.boot.kernel}/lib/modules $out/lib/modules
+          ${optionalString (config.boot.kernel ? modules) ''
+            ln -sf ${getOutput "modules" config.boot.kernel}/lib/modules $out/lib/modules
           ''}
 
           # /bin (and /sbin)
@@ -488,8 +524,8 @@ in
           (pushd $out && ln -sf ./tmp ./run && ln -sf ./tmp ./var/run)
 
           # /etc
-          ${lib.concatLines (
-            lib.mapAttrsToList (
+          ${concatLines (
+            mapAttrsToList (
               pathUnderEtc:
               { source }:
               ''
@@ -537,7 +573,7 @@ in
         compressor = "xz";
         contents = [
           {
-            source = lib.getExe' pkgs.mixos "mixos-rdinit";
+            source = getExe' pkgs.mixos "mixos-rdinit";
             target = "/init";
           }
           {
