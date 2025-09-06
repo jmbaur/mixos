@@ -7,7 +7,7 @@ in
   mixos.testing.enable = true;
 
   boot.kernel = pkgs.linuxKernel.manualConfig {
-    inherit (pkgs.linux_6_15) src version;
+    inherit (pkgs.linux_6_16) src version;
     inherit configfile;
   };
 
