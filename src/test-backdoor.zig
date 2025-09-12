@@ -31,6 +31,7 @@ fn runCommand(allocator: std.mem.Allocator, conn: *std.net.Server.Connection, ar
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = args.command,
+        .max_output_bytes = std.math.maxInt(usize),
     });
 
     const out = try std.json.stringifyAlloc(
@@ -76,6 +77,8 @@ fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connecti
             }, .{});
             try conn.stream.writeAll(out);
         };
+
+        try conn.stream.writeAll(&.{0});
     }
 }
 

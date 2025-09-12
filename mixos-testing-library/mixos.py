@@ -47,20 +47,37 @@ class Machine:
 
     def connect(self):
         retries = 0
-        while retries < 10:
+        while True:
             try:
                 logger.debug("attempting connection")
                 self.sock = socket.create_connection(
                     *self.create_connection_args, **self.create_connection_kwargs
                 )
-                break
-            except OSError:
+                return
+            except OSError as e:
                 logger.info("connection failed, retrying")
                 retries += 1
+                if retries > 10:
+                    raise e
 
     def recv_message(self):
         assert self.sock is not None
-        raw_response = self.sock.recv(1 << 16)
+
+        buf = bytearray()
+
+        while True:
+            data = self.sock.recv(1 << 16)
+            if not data:
+                raise Exception("socket closed")
+
+            buf_len = len(buf)
+            buf.extend(data)
+
+            null_index = data.find(0)
+            if null_index >= 0:
+                raw_response = bytes(buf[: buf_len + null_index])
+                break
+
         logger.debug("message from machine: {}".format(raw_response))
         response = json.loads(raw_response)
         if "error" in response:
