@@ -45,7 +45,7 @@ fn runCommand(allocator: std.mem.Allocator, conn: *std.net.Server.Connection, ar
             .stderr = run_result.stderr,
             .stdout = run_result.stdout,
         } } },
-        .{},
+        .{ .emit_strings_as_arrays = true },
     );
 
     try conn.stream.writeAll(out);

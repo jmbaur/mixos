@@ -10,16 +10,16 @@ logger = logging.getLogger(__name__)
 run_command_schema = Schema(
     {
         "exit_code": int,
-        "stdout": str,
-        "stderr": str,
+        "stdout": [int],
+        "stderr": [int],
     }
 )
 
 
 class RunCommandResult(TypedDict):
     exit_code: int
-    stdout: str
-    stderr: str
+    stdout: list[int]
+    stderr: list[int]
 
 
 class Machine:
@@ -98,5 +98,5 @@ if __name__ == "__main__":
     with Machine(address=(args.ip, args.port), timeout=10) as machine:
         response = machine.run_command(args.command)
         print("exit_code: {}".format(response["exit_code"]))
-        print("\nstdout:\n{}".format(response["stdout"].strip()))
-        print("\nstderr:\n{}".format(response["stderr"].strip()))
+        print("\nstdout:\n{}".format(bytes(response["stdout"]).decode().strip()))
+        print("\nstderr:\n{}".format(bytes(response["stderr"]).decode().strip()))
