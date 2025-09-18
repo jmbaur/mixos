@@ -435,34 +435,34 @@ in
 
         reboot = {
           action = "ctrlaltdel";
-          process = "/sbin/reboot";
+          process = mkDefault "/sbin/reboot";
         };
 
         umount = {
           action = "shutdown";
-          process = "/bin/umount -a -r";
+          process = mkDefault "/bin/umount -a -r";
         };
 
         syslog = {
           action = "respawn";
-          process = "/bin/syslogd -n -D";
+          process = mkDefault "/bin/syslogd -n -D";
         };
 
         klogd = {
           action = "respawn";
-          process = "/bin/klogd -n";
+          process = mkDefault "/bin/klogd -n";
           deps = [ "syslog" ];
         };
 
         mdev = {
           action = "respawn";
-          process = "/bin/mdev -d -f -S";
+          process = mkDefault "/bin/mdev -d -f -S";
           deps = [ "syslog" ];
         };
 
         crond = {
           action = "respawn";
-          process = "/bin/crond -f -S";
+          process = mkDefault "/bin/crond -f -S";
           deps = [ "syslog" ];
         };
 
