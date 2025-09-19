@@ -27,15 +27,14 @@ const ServerMessage = union(enum) {
     },
 };
 
-fn runCommand(allocator: std.mem.Allocator, conn: *std.net.Server.Connection, args: ClientCommandMessage) anyerror!void {
+fn runCommand(allocator: std.mem.Allocator, writer: *std.Io.Writer, args: ClientCommandMessage) anyerror!void {
     const run_result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = args.command,
         .max_output_bytes = std.math.maxInt(usize),
     });
 
-    const out = try std.json.stringifyAlloc(
-        allocator,
+    try std.json.Stringify.value(
         ServerMessage{ .result = .{ .run_command = .{
             .exit_code = switch (run_result.term) {
                 .Exited => |exited| @as(u32, exited),
@@ -47,38 +46,50 @@ fn runCommand(allocator: std.mem.Allocator, conn: *std.net.Server.Connection, ar
             .stdout = run_result.stdout,
         } } },
         .{ .emit_strings_as_arrays = true },
+        writer,
     );
-
-    try conn.stream.writeAll(out);
 }
 
 fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connection) !void {
-    while (true) {
-        const raw_message = conn.stream.reader().readUntilDelimiterAlloc(allocator, 0, std.math.maxInt(usize)) catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
+    var read_buf = [_]u8{0} ** 4096;
+    var write_buf = [_]u8{0} ** 4096;
 
-        const message = std.json.parseFromSlice(ClientMessage, allocator, raw_message, .{}) catch |err| {
-            const out = try std.json.stringifyAlloc(allocator, ServerMessage{
-                .@"error" = err,
-            }, .{});
-            try conn.stream.writeAll(out);
+    var message_writer = std.Io.Writer.Allocating.init(allocator);
+    var stream = conn.stream.writer(&write_buf);
+    var stream_writer = &stream.interface;
+
+    while (true) {
+        var stream_reader = conn.stream.reader(&read_buf);
+        var reader: *std.Io.Reader = stream_reader.interface();
+        while (true) {
+            const end = try reader.streamDelimiterEnding(&message_writer.writer, 0);
+            if (reader.bufferedLen() == 0) {
+                return;
+            }
+            if (end == 0) {
+                break;
+            }
+        }
+
+        const message = std.json.parseFromSlice(ClientMessage, allocator, message_writer.written(), .{}) catch |err| {
+            try std.json.Stringify.value(
+                ServerMessage{ .@"error" = err },
+                .{},
+                stream_writer,
+            );
             return;
         };
 
         const res = switch (message.value) {
-            .run_command => runCommand(allocator, conn, message.value.run_command),
+            .run_command => runCommand(allocator, stream_writer, message.value.run_command),
         };
 
         res catch |err| {
-            const out = try std.json.stringifyAlloc(allocator, ServerMessage{
-                .@"error" = err,
-            }, .{});
-            try conn.stream.writeAll(out);
+            try std.json.Stringify.value(ServerMessage{ .@"error" = err }, .{}, stream_writer);
         };
 
-        try conn.stream.writeAll(&.{0});
+        try stream_writer.writeByte(0);
+        try stream_writer.flush();
     }
 }
 
@@ -94,7 +105,7 @@ pub fn main() !void {
 
     var server = try addr.listen(.{});
 
-    std.log.info("mixos test backdoor server listening on {}", .{addr});
+    std.log.info("mixos test backdoor server listening on {f}", .{addr});
 
     while (true) {
         defer {
@@ -104,12 +115,12 @@ pub fn main() !void {
         var conn = try server.accept();
         defer conn.stream.close();
 
-        std.log.debug("connection started with {}", .{conn.address});
+        std.log.debug("connection started with {f}", .{conn.address});
 
         handleConnection(arena.allocator(), &conn) catch |err| {
             std.log.err("connection handling failed: {}", .{err});
         };
 
-        std.log.debug("connection ended with {}", .{conn.address});
+        std.log.debug("connection ended with {f}", .{conn.address});
     }
 }

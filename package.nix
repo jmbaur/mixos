@@ -1,14 +1,14 @@
 {
   lib,
   stdenvNoCC,
-  zig_0_14,
+  zig_0_15,
 }:
 
 stdenvNoCC.mkDerivation {
   pname = "mixos";
   version = "0.1.0";
 
-  depsBuildBuild = [ zig_0_14 ];
+  depsBuildBuild = [ zig_0_15 ];
 
   src = lib.fileset.toSource {
     root = ./.;

@@ -35,7 +35,7 @@ fn kmsgLog(
 ) void {
     const syslog_prefix = comptime b: {
         var buf: [2]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&buf);
+        var fixed_writer: std.Io.Writer = .fixed(&buf);
 
         // 0 KERN_EMERG
         // 1 KERN_ALERT
@@ -47,15 +47,15 @@ fn kmsgLog(
         // 7 KERN_DEBUG
 
         // https://github.com/torvalds/linux/blob/f2661062f16b2de5d7b6a5c42a9a5c96326b8454/Documentation/ABI/testing/dev-kmsg#L1
-        const syslog_level = ((SYSLOG_FACILITY_USER << 3) | switch (level) {
+        const syslog_level: u16 = ((SYSLOG_FACILITY_USER << 3) | switch (level) {
             .err => 3,
             .warn => 4,
             .info => 6,
             .debug => 7,
         });
 
-        std.fmt.formatIntValue(syslog_level, "", .{}, fbs.writer()) catch return;
-        break :b fbs.getWritten();
+        fixed_writer.printInt(syslog_level, 10, .lower, .{}) catch @compileError("invalid syslog prefix");
+        break :b fixed_writer.buffer;
     };
 
     const file = kmsg orelse return;
@@ -122,7 +122,7 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
         .{ .mode = .write_only },
     )) |printk_devkmsg| {
         defer printk_devkmsg.close();
-        printk_devkmsg.writer().writeAll("on\n") catch {};
+        printk_devkmsg.writeAll("on\n") catch {};
     } else |_| {}
 
     if (std.fs.cwd().openFile("/dev/kmsg", .{ .mode = .write_only })) |file| {
@@ -157,7 +157,7 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
         return std.posix.unexpectedErrno(loop_nr_err);
     }
 
-    const loop_device_path = try std.fmt.allocPrintZ(allocator, "/dev/loop{}", .{@as(usize, loop_nr)});
+    const loop_device_path = try std.fmt.allocPrintSentinel(allocator, "/dev/loop{}", .{@as(usize, loop_nr)}, 0);
     log.debug("using loopback device {s}", .{loop_device_path});
 
     const loop_device = try std.fs.cwd().openFile(loop_device_path, .{ .mode = .read_write });

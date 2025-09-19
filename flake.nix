@@ -56,23 +56,40 @@
           };
           mixosPkgs = mixosConfig._module.args.pkgs;
           qemuOpts =
-            {
-              x86_64 = [
-                "-machine"
-                "q35"
-              ];
-              arm64 = [
-                "-machine"
-                "virt"
-                "-cpu"
-                "cortex-a53"
-              ];
-            }
-            .${mixosPkgs.stdenv.hostPlatform.linuxArch} or [ ];
-          kernelParams = [
-            "debug"
-          ]
-          ++ optionals mixosPkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ];
+            (
+              {
+                x86_64 = [
+                  "-machine"
+                  "q35"
+                ];
+                arm64 = [
+                  "-machine"
+                  "virt"
+                  "-cpu"
+                  "cortex-a53"
+                ];
+              }
+              .${mixosPkgs.stdenv.hostPlatform.linuxArch} or [ ]
+            )
+            ++ [
+              "-m"
+              "2G"
+              "-nographic"
+              "-device"
+              "e1000,netdev=net0"
+              "-netdev"
+              "user,id=net0,hostfwd=tcp::8000-:8000"
+              "-kernel"
+              "${mixosConfig.config.system.build.all}/kernel"
+              "-initrd"
+              "${mixosConfig.config.system.build.all}/initrd"
+              "-append"
+              "\"${
+                toString (
+                  [ "debug" ] ++ optionals mixosPkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ]
+                )
+              }\""
+            ];
         in
         {
           default = {
@@ -80,9 +97,12 @@
             meta.description = "Launch MixOS in a VM";
             program = toString (
               pkgs.writeShellScript "mixos-test" ''
-                ${pkgs.qemu}/bin/qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} ${toString qemuOpts} \
-                  -m 2G -nographic -kernel ${mixosConfig.config.system.build.all}/kernel -initrd ${mixosConfig.config.system.build.all}/initrd -append "${toString kernelParams}" \
-                  -device e1000,netdev=net0 -netdev user,id=net0,hostfwd=tcp::8000-:8000
+                declare -a qemu_opts
+                if [[ -c /dev/kvm ]]; then
+                  qemu_opts+=("-enable-kvm")
+                fi
+                qemu_opts+=(${toString qemuOpts})
+                ${pkgs.qemu}/bin/qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} "''${qemu_opts[@]}"
               ''
             );
           };
@@ -93,7 +113,7 @@
         default = pkgs.mkShell {
           packages = with pkgs; [
             (python3.withPackages (p: [ p.mixos-testing-library ]))
-            zig_0_14
+            zig_0_15
           ];
         };
       }) inputs.self.legacyPackages;
@@ -104,7 +124,7 @@
           runtimeInputs = [
             pkgs.nixfmt
             pkgs.ruff
-            pkgs.zig_0_14
+            pkgs.zig_0_15
           ];
 
           settings = {
