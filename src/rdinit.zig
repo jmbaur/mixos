@@ -176,6 +176,16 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
 
     try mount(loop_device_path, "/sysroot", rootfstype, system.MS.RDONLY | system.MS.NODEV | system.MS.NOSUID, 0);
 
+    var passthru_dir = std.fs.cwd().openDir("/passthru", .{});
+    if (passthru_dir) |*dir| {
+        dir.close();
+        log.debug("passing through contents of /passthru", .{});
+        try mount("/passthru", "/sysroot/passthru", "", system.MS.BIND, 0);
+    } else |err| switch (err) {
+        error.FileNotFound, error.NotDir => {},
+        else => return err,
+    }
+
     switch (system.E.init(system.chdir("/sysroot"))) {
         .SUCCESS => {},
         else => |err| {
@@ -195,7 +205,7 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
     log.debug("moving pseudofilesystems into final root filesystem", .{});
     try mount("/dev", "/sysroot/dev", "", system.MS.MOVE, 0);
     try mount("/sys", "/sysroot/sys", "", system.MS.MOVE, 0);
-    try mount("/proc", "/sysroot/proc", "/proc", system.MS.MOVE, 0);
+    try mount("/proc", "/sysroot/proc", "", system.MS.MOVE, 0);
     try mount(".", "/", "", system.MS.MOVE, 0);
 
     log.debug("chrooting into final root filesystem", .{});

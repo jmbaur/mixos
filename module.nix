@@ -500,7 +500,7 @@ in
         pkgs.runCommand "mixos-root" { } ''
           # our root filesystem is read-only, so we must create all top-level
           # directories for any future mountpoints
-          mkdir -p $out/{lib,etc,dev,proc,sys,var,tmp,state}
+          mkdir -p $out/{lib,etc,dev,proc,sys,var,tmp,state,passthru}
 
           # pid 1
           ln -sf ${bin}/bin/init $out/init

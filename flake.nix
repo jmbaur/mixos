@@ -9,6 +9,7 @@
       inherit (inputs.nixpkgs.lib)
         evalModules
         genAttrs
+        getExe
         mapAttrs
         optionals
         ;
@@ -76,13 +77,13 @@
               "2G"
               "-nographic"
               "-device"
-              "e1000,netdev=net0"
+              "\"e1000,netdev=net0\""
               "-netdev"
-              "user,id=net0,hostfwd=tcp::8000-:8000"
+              "\"user,id=net0,hostfwd=tcp::8000-:8000\""
               "-kernel"
               "${mixosConfig.config.system.build.all}/kernel"
               "-initrd"
-              "${mixosConfig.config.system.build.all}/initrd"
+              "test.initrd"
               "-append"
               "\"${
                 toString (
@@ -95,15 +96,30 @@
           default = {
             type = "app";
             meta.description = "Launch MixOS in a VM";
-            program = toString (
-              pkgs.writeShellScript "mixos-test" ''
-                declare -a qemu_opts
-                if [[ -c /dev/kvm ]]; then
-                  qemu_opts+=("-enable-kvm")
-                fi
-                qemu_opts+=(${toString qemuOpts})
-                ${pkgs.qemu}/bin/qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} "''${qemu_opts[@]}"
-              ''
+            program = getExe (
+              pkgs.writeShellApplication {
+                name = "mixos-test";
+                runtimeInputs = [
+                  pkgs.qemu
+                  pkgs.cpio
+                ];
+                text = ''
+                  tmp=$(mktemp -d)
+                  trap 'rm -rf $tmp; rm -f {passthru,test}.initrd' EXIT
+                  mkdir "$tmp/passthru"
+                  echo hello >"$tmp/passthru/hello"
+                  (cd "$tmp"; find . -print0 | cpio --quiet -o -H newc -R +0:+0 --null >"$OLDPWD/passthru.initrd")
+                  cat ${mixosConfig.config.system.build.all}/initrd passthru.initrd >test.initrd
+
+                  declare -a qemu_opts
+                  if [[ -c /dev/kvm ]]; then
+                    qemu_opts+=("-enable-kvm")
+                  fi
+
+                  qemu_opts+=(${toString qemuOpts})
+                  qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} "''${qemu_opts[@]}"
+                '';
+              }
             );
           };
         }

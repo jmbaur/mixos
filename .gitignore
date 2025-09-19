@@ -1,3 +1,4 @@
+*.initrd
 /.direnv
 /.zig-cache
 /zig-out
