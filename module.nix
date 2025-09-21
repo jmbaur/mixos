@@ -155,7 +155,7 @@ in
           kernel:
           kernel.overrideAttrs (
             old:
-            optionalAttrs (!(elem "modules" old.outputs) && old.passthru.config.isYes "MODULES") {
+            optionalAttrs (!(elem "modules" old.outputs or [ ]) && old.passthru.config.isYes "MODULES") {
               outputs = old.outputs ++ [ "modules" ];
               preConfigure = ''
                 unset modules
