@@ -273,6 +273,8 @@ in
             deps = mkOption {
               type = types.listOf types.str;
               default = [ ];
+              # Used to ensure syslogd starts before anything else.
+              apply = deps: deps ++ [ "syslogd" ];
             };
           };
         }
@@ -378,7 +380,7 @@ in
       };
 
       init = {
-        sysinit = {
+        mixos-startup = {
           action = "sysinit";
           process = pkgs.writeScript "mixos-startup" ''
             #!/bin/sh
@@ -428,7 +430,7 @@ in
           '';
         };
 
-        restart = {
+        init = {
           action = "restart";
           process = "/sbin/init";
         };
@@ -443,7 +445,7 @@ in
           process = mkDefault "/bin/umount -a -r";
         };
 
-        syslog = {
+        syslogd = {
           action = "respawn";
           process = mkDefault "/bin/syslogd -n -D";
         };
@@ -451,19 +453,16 @@ in
         klogd = {
           action = "respawn";
           process = mkDefault "/bin/klogd -n";
-          deps = [ "syslog" ];
         };
 
         mdev = {
           action = "respawn";
           process = mkDefault "/bin/mdev -d -f -S";
-          deps = [ "syslog" ];
         };
 
         crond = {
           action = "respawn";
           process = mkDefault "/bin/crond -f -S";
-          deps = [ "syslog" ];
         };
 
         ntpd = mkIf (any id (map (hasAttr "ntp.conf") options.etc.definitions)) (mkDefault {
