@@ -23,7 +23,7 @@ pub fn logFn(
     // however we also need to ensure our buffer has a null terminator to play
     // well with syslog(). So we drop logs that are the same length as our
     // buffer.
-    if (log_writer.end == log_writer.buffer) {
+    if (log_writer.end == log_writer.buffer.len) {
         return;
     }
 
@@ -132,6 +132,9 @@ fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connecti
 }
 
 pub fn main() !void {
+    c.openlog("mixos-test-backdoor", 0, c.LOG_USER);
+    defer c.closelog();
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -143,7 +146,7 @@ pub fn main() !void {
 
     var server = try addr.listen(.{});
 
-    std.log.info("mixos test backdoor server listening on {f}", .{addr});
+    std.log.info("server listening on {f}", .{addr});
 
     while (true) {
         defer {
