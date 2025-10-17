@@ -32,6 +32,7 @@ pub fn build(b: *std.Build) void {
         .name = "mixos-test-backdoor",
         .root_module = mixos_test_backdoor_exe_mod,
     });
+    mixos_test_backdoor.linkLibC(); // for syslog() and friends
 
     b.installArtifact(mixos_init);
     b.installArtifact(mixos_test_backdoor);
