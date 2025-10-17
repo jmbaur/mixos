@@ -68,7 +68,7 @@ class Machine:
         while True:
             data = self.sock.recv(1 << 16)
             if not data:
-                raise Exception("socket closed")
+                raise EOFError("socket closed")
 
             buf_len = len(buf)
             buf.extend(data)
