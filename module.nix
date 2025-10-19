@@ -410,6 +410,9 @@ in
             mkdir -p /state/var
             mount -o bind /state/var /var
 
+            # Create /var/empty, useful in many contexts
+            mkdir -p /var/empty
+
             mkdir -p /state/.etc/work /state/.etc/upper
             mount -t overlay overlay -o lowerdir=/etc,upperdir=/state/.etc/upper,workdir=/state/.etc/work /etc
 
