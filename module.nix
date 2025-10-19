@@ -368,7 +368,6 @@ in
         "inittab".source = pkgs.writeText "mixos-inittab" (
           (textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs) + "\n")
         );
-        "mdev.conf".source = pkgs.writeText "mixos-mdev" "";
         "hosts".source = mkIf (config.boot.kernel.config.isYes "NET") (
           mkDefault (
             pkgs.writeText "etc-hosts" ''
