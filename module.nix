@@ -398,6 +398,9 @@ in
             ${optionalString (config.boot.kernel.config.isYes "DEBUG_FS_ALLOW_ALL") ''
               mount -t debugfs debugfs -o nosuid,noexec,nodev /sys/kernel/debug
             ''}
+            ${optionalString (config.boot.kernel.config.isYes "CGROUPS") ''
+              mount -t cgroup2 cgroup2 -o nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot /sys/fs/cgroup
+            ''}
             ${optionalString (config.boot.kernel.config.isYes "SHMEM") ''
               mkdir /dev/shm
               mount -t tmpfs tmpfs -o nosuid,nodev /dev/shm
