@@ -87,6 +87,8 @@ let
         [
           "-t"
           "tmpfs"
+          "-o"
+          "mode=755"
           "tmpfs"
         ]
     )
