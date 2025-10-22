@@ -92,13 +92,18 @@ fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connecti
     var read_buf = [_]u8{0} ** 4096;
     var write_buf = [_]u8{0} ** 4096;
 
-    var message_writer = std.Io.Writer.Allocating.init(allocator);
     var stream = conn.stream.writer(&write_buf);
     var stream_writer = &stream.interface;
 
     while (true) {
+        defer stream_writer.flush() catch {};
+
+        var message_writer = std.Io.Writer.Allocating.init(allocator);
+        defer message_writer.deinit();
+
         var stream_reader = conn.stream.reader(&read_buf);
         var reader: *std.Io.Reader = stream_reader.interface();
+
         while (true) {
             const end = try reader.streamDelimiterEnding(&message_writer.writer, 0);
             if (reader.bufferedLen() == 0) {
@@ -127,7 +132,6 @@ fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connecti
         };
 
         try stream_writer.writeByte(0);
-        try stream_writer.flush();
     }
 }
 
