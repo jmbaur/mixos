@@ -1,4 +1,5 @@
 *.initrd
+.nixos-test-history
 /.direnv
 /.zig-cache
 /zig-out

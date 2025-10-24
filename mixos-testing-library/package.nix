@@ -16,7 +16,7 @@ python.pkgs.buildPythonPackage {
     root = ./.;
     fileset = lib.fileset.unions [
       ./pyproject.toml
-      ./mixos.py
+      ./mixos
     ];
   };
 }

@@ -17,11 +17,11 @@
     {
       overlays.default = final: prev: {
         mixos = final.callPackage ./package.nix { };
-        python3 = prev.python3.override {
-          packageOverrides = pyfinal: _: {
+        pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
+          (pyfinal: _: {
             mixos-testing-library = pyfinal.callPackage ./mixos-testing-library/package.nix { };
-          };
-        };
+          })
+        ];
       };
 
       legacyPackages = genAttrs [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ] (
