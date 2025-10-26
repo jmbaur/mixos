@@ -43,7 +43,7 @@ let
 
   bin = pkgs.buildEnv {
     name = "mixos-bin";
-    paths = map getBin config.bin;
+    paths = map getBin (config.bin ++ [ pkgs.busybox ]);
     pathsToLink = [ "/bin" ];
   };
 
@@ -190,6 +190,9 @@ in
     bin = mkOption {
       type = types.listOf types.package;
       default = [ ];
+      description = ''
+        Packages to be included in the runtime system and available in $PATH.
+      '';
     };
 
     etc = mkOption {
@@ -364,8 +367,6 @@ in
       };
     }
     {
-      bin = [ pkgs.busybox ];
-
       etc = {
         "inittab".source = pkgs.writeText "mixos-inittab" (
           (textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs) + "\n")
