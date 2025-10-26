@@ -9,12 +9,14 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/rdinit.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = true,
     });
 
     const mixos_test_backdoor_exe_mod = b.createModule(.{
         .root_source_file = b.path("src/test-backdoor.zig"),
         .target = target,
         .optimize = optimize,
+        .strip = true,
     });
 
     const unit_tests_mod = b.createModule(.{

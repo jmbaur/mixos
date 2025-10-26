@@ -23,12 +23,16 @@ stdenvNoCC.mkDerivation {
 
   zigBuildFlags = [
     "--color off"
-    "-Doptimize=ReleaseSmall"
+    "-Doptimize=ReleaseSafe"
     "-Dcpu=baseline"
     "-Dtarget=${stdenvNoCC.hostPlatform.qemuArch}-${stdenvNoCC.hostPlatform.parsed.kernel.name}"
   ];
 
   doCheck = true;
+
+  # We produce statically built executables, no need for these.
+  dontStrip = true;
+  dontPatchELF = true;
 
   configurePhase = ''
     runHook preConfigure
