@@ -13,6 +13,7 @@ let
     any
     attrNames
     concatLines
+    concatMapStringsSep
     concatStringsSep
     elem
     escapeShellArgs
@@ -73,24 +74,15 @@ let
   mountState = escapeShellArgs (
     [ "mount" ]
     ++ (
-      if config.state.enable then
-        [
-          "-t"
-          "${config.state.fsType}"
-        ]
-        ++ optionals (config.state.options != [ ]) [
-          "-o"
-          (concatStringsSep "," config.state.options)
-        ]
-        ++ [ config.state.what ]
-      else
-        [
-          "-t"
-          "tmpfs"
-          "-o"
-          "mode=755"
-          "tmpfs"
-        ]
+      [
+        "-t"
+        "${config.state.fsType}"
+      ]
+      ++ optionals (config.state.options != [ ]) [
+        "-o"
+        (concatStringsSep "," config.state.options)
+      ]
+      ++ [ config.state.device ]
     )
     ++ [ "/state" ]
   );
@@ -296,10 +288,24 @@ in
 
     state = {
       enable = mkEnableOption "persistence of state";
+      init = mkOption {
+        type = types.path;
+        default = "";
+        description = ''
+          Program to initialize state. For example, formatting disks, creating
+          device-mapper devices, etc.
+        '';
+      };
       fsType = mkOption {
         type = types.str;
         description = ''
           The filesystem type of the state device.
+        '';
+      };
+      device = mkOption {
+        type = types.str;
+        description = ''
+          The device being mounted.
         '';
       };
       options = mkOption {
@@ -429,7 +435,17 @@ in
             mount -t tmpfs tmpfs -o nosuid,nodev /tmp
 
             # Mount state directory and bind to /var
-            ${mountState}
+            ${
+              if config.state.enable then
+                ''
+                  ${config.state.init}
+                  ${mountState}
+                ''
+              else
+                ''
+                  mount -t tmpfs -o mode=755 tmpfs /state
+                ''
+            }
             mkdir -p /state/var
             mount -o bind /state/var /var
 
