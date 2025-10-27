@@ -185,6 +185,14 @@ in
           files to any of these directories.
         '';
       };
+
+      kernelModules = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = ''
+          Kernel modules to load during early bootup.
+        '';
+      };
     };
 
     bin = mkOption {
@@ -384,8 +392,17 @@ in
       init = {
         mixos-startup = {
           action = "sysinit";
+          # TODO(jared): This script is currently not capable of doing error
+          # reporting. It would be nice if this logic was encoded in a proper
+          # program that logged to /dev/kmsg, then any logging would get picked
+          # up by klogd, which would then be forwarded to syslogd.
           process = pkgs.writeScript "mixos-startup" ''
             #!/bin/sh
+
+            # TODO: figure out automatic kernel module loading
+            ${concatMapStringsSep "\n" (module: ''
+              modprobe ${module}
+            '') config.boot.kernelModules}
 
             # Create initial char/block nodes
             mdev -f -s -S
