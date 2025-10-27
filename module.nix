@@ -383,7 +383,7 @@ in
     {
       etc = {
         "inittab".source = pkgs.writeText "mixos-inittab" (
-          (textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs) + "\n")
+          textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs) + "\n"
         );
         "hosts".source = mkIf (config.boot.kernel.config.isYes "NET") (
           mkDefault (
@@ -512,7 +512,7 @@ in
         });
 
         test-backdoor = {
-          enable = config.mixos.testing.enable;
+          inherit (config.mixos.testing) enable;
           action = "respawn";
           process = toString [
             (getExe' pkgs.mixos "mixos-test-backdoor")

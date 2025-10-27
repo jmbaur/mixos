@@ -5,7 +5,7 @@ let
 in
 python.pkgs.buildPythonPackage {
   pname = pyproject.project.name;
-  version = pyproject.project.version;
+  inherit (pyproject.project) version;
 
   pyproject = true;
 
