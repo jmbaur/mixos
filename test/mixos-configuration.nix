@@ -11,6 +11,16 @@ in
     inherit configfile;
   };
 
+  state = {
+    enable = true;
+    fsType = "ext2";
+    device = "/dev/vda";
+    init = pkgs.writeScript "state-init.sh" ''
+      #!/bin/sh
+      mkfs.ext2 -L mixos-state /dev/vda
+    '';
+  };
+
   init.shell = {
     tty =
       {
@@ -29,5 +39,13 @@ in
 
   etc."ntp.conf".source = pkgs.writeText "ntp.conf" ''
     server time.nist.gov
+  '';
+
+  etc."hostname".source = pkgs.writeText "hostname" ''
+    mixos-test
+  '';
+
+  mdev.rules = ''
+    null 0:0 666
   '';
 }
