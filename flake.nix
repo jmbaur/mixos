@@ -111,6 +111,9 @@
                   (cd "$tmp"; find . -print0 | cpio --quiet -o -H newc -R +0:+0 --null >"$OLDPWD/passthru.initrd")
                   cat ${mixosConfig.config.system.build.all}/initrd passthru.initrd >test.initrd
 
+                  qemu-img create -f qcow2 mixos.qcow2 1G
+                  qemu_opts+=("-drive" "file=mixos.qcow2,if=virtio")
+
                   declare -a qemu_opts
                   if [[ -c /dev/kvm ]]; then
                     qemu_opts+=("-enable-kvm")

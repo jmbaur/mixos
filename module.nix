@@ -8,32 +8,33 @@
 
 let
   inherit (lib.asserts) checkAssertWarn;
-
   inherit (lib)
     any
     attrNames
     concatLines
-    concatMapStringsSep
-    concatStringsSep
     elem
-    escapeShellArgs
     filter
     filterAttrs
+    flatten
     getBin
-    getExe'
+    getExe
     getOutput
+    groupBy
     hasAttr
     id
     isFunction
+    listToAttrs
     mapAttrs
     mapAttrsToList
     mergeOneOption
+    mkBefore
     mkDefault
     mkEnableOption
     mkIf
     mkMerge
     mkOption
     mkOptionType
+    nameValuePair
     optionalAttrs
     optionalString
     optionals
@@ -55,37 +56,53 @@ let
     ignoreCollisions = true;
   };
 
-  # <id>:<runlevels>:<action>:<process>
-  inittabTextAttrs = mapAttrs (
-    _:
-    {
-      tty,
-      action,
-      process,
-      deps,
-      ...
-    }:
-    {
-      inherit deps;
-      text = "${tty}::${action}:${process}";
-    }
-  ) (filterAttrs (_: { enable, ... }: enable) config.init);
+  possibleActions = [
+    "sysinit"
+    "wait"
+    "once"
+    "respawn"
+    "askfirst"
+    "shutdown"
+    "restart"
+    "ctrlaltdel"
+  ];
 
-  mountState = escapeShellArgs (
-    [ "mount" ]
-    ++ (
-      [
-        "-t"
-        "${config.state.fsType}"
-      ]
-      ++ optionals (config.state.options != [ ]) [
-        "-o"
-        (concatStringsSep "," config.state.options)
-      ]
-      ++ [ config.state.device ]
-    )
-    ++ [ "/state" ]
-  );
+  # <id>:<runlevels>:<action>:<process>
+  inittab =
+    let
+      groups =
+        mapAttrs
+          (
+            _: groupEntries:
+            let
+              inittabTextAttrs = listToAttrs groupEntries;
+            in
+            textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs)
+          )
+          (
+            groupBy (x: x.group) (
+              mapAttrsToList (
+                name:
+                {
+                  tty,
+                  action,
+                  process,
+                  deps,
+                  ...
+                }:
+                {
+                  group = action;
+                  inherit name;
+                  value = {
+                    inherit deps;
+                    text = "${tty}::${action}:${process}"; # busybox /init does not implement runlevels
+                  };
+                }
+              ) (filterAttrs (_: { enable, ... }: enable) config.init)
+            )
+          );
+    in
+    concatLines (flatten (map (action: groups.${action} or [ ]) possibleActions));
 in
 {
   options = {
@@ -209,88 +226,93 @@ in
     init = mkOption {
       default = { };
       type = types.attrsOf (
-        types.submodule {
-          options = {
-            enable = mkOption {
-              type = types.bool;
-              default = true;
-              description = ''
-                Whether to enable this process on startup.
-              '';
+        types.submodule (
+          { config, ... }:
+          {
+            options = {
+              enable = mkOption {
+                type = types.bool;
+                default = true;
+                description = ''
+                  Whether to enable this process on startup.
+                '';
+              };
+
+              tty = mkOption {
+                type = types.str;
+                default = "null";
+                example = "tty1";
+                description = ''
+                  This field is used by BusyBox init to specify the controlling
+                  tty for the specified process to run on.  The contents of this
+                  field are appended to "/dev/" and used as-is.  There is no need
+                  for this field to be unique, although if it isn't you may have
+                  strange results.  If this field is left blank, then the init's
+                  stdin/out will be used.
+                '';
+              };
+
+              action = mkOption {
+                type = types.enum possibleActions;
+                description = ''
+                  sysinit actions are started first, and init waits for them to
+                  complete. wait actions are started next, and init waits for
+                  them to complete. once actions are started next (and not waited
+                  for).
+
+                  askfirst and respawn are started next. For askfirst, before
+                  running the specified process, init displays the line "Please
+                  press Enter to activate this console" and then waits for the
+                  user to press enter before starting it.
+
+                  shutdown actions are run on halt/reboot/poweroff, or on
+                  SIGQUIT. Then the machine is halted/rebooted/powered off, or
+                  for SIGQUIT, restart action is exec'ed (init process is
+                  replaced by that process). If no restart action specified,
+                  SIGQUIT has no effect.
+
+                  ctrlaltdel actions are run when SIGINT is received (this might
+                  be initiated by Ctrl-Alt-Del key combination). After they
+                  complete, normal processing of askfirst / respawn resumes.
+                '';
+              };
+
+              process = mkOption {
+                type = types.either types.str types.package;
+                example = "/bin/echo 'hello, world'";
+                description = ''
+                  Specifies the process to be executed and it's command line.
+                '';
+              };
+
+              deps = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+              };
             };
 
-            tty = mkOption {
-              type = types.str;
-              default = "null";
-              example = "tty1";
-              description = ''
-                This field is used by BusyBox init to specify the controlling
-                tty for the specified process to run on.  The contents of this
-                field are appended to "/dev/" and used as-is.  There is no need
-                for this field to be unique, although if it isn't you may have
-                strange results.  If this field is left blank, then the init's
-                stdin/out will be used.
-              '';
+            # Used to ensure syslogd starts before anything else that uses the
+            # "respawn" action.
+            config = mkIf (config.action == "respawn") {
+              deps = [ "syslogd" ];
             };
-
-            action = mkOption {
-              type = types.enum [
-                "sysinit"
-                "wait"
-                "once"
-                "respawn"
-                "askfirst"
-                "shutdown"
-                "restart"
-                "ctrlaltdel"
-              ];
-              description = ''
-                sysinit actions are started first, and init waits for them to
-                complete. wait actions are started next, and init waits for
-                them to complete. once actions are started next (and not waited
-                for).
-
-                askfirst and respawn are started next. For askfirst, before
-                running the specified process, init displays the line "Please
-                press Enter to activate this console" and then waits for the
-                user to press enter before starting it.
-
-                shutdown actions are run on halt/reboot/poweroff, or on
-                SIGQUIT. Then the machine is halted/rebooted/powered off, or
-                for SIGQUIT, restart action is exec'ed (init process is
-                replaced by that process). If no restart action specified,
-                SIGQUIT has no effect.
-
-                ctrlaltdel actions are run when SIGINT is received (this might
-                be initiated by Ctrl-Alt-Del key combination). After they
-                complete, normal processing of askfirst / respawn resumes.
-              '';
-            };
-
-            process = mkOption {
-              type = types.either types.str types.package;
-              example = "/bin/echo 'hello, world'";
-              description = ''
-                Specifies the process to be executed and it's command line.
-              '';
-            };
-
-            deps = mkOption {
-              type = types.listOf types.str;
-              default = [ ];
-              # Used to ensure syslogd starts before anything else.
-              apply = deps: deps ++ [ "syslogd" ];
-            };
-          };
-        }
+          }
+        )
       );
+    };
+
+    mdev.rules = mkOption {
+      type = types.lines;
+      description = ''
+        Rules to be interpreted by mdev, placed in `/etc/mdev.conf`.
+      '';
     };
 
     state = {
       enable = mkEnableOption "persistence of state";
       init = mkOption {
-        type = types.path;
-        default = "";
+        type = types.nullOr types.path;
+        default = null;
         description = ''
           Program to initialize state. For example, formatting disks, creating
           device-mapper devices, etc.
@@ -382,9 +404,8 @@ in
     }
     {
       etc = {
-        "inittab".source = pkgs.writeText "mixos-inittab" (
-          textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs) + "\n"
-        );
+        "inittab".source = pkgs.writeText "mixos-inittab" inittab;
+        "mdev.conf".source = pkgs.writeText "mdev.conf" config.mdev.rules;
         "hosts".source = mkIf (config.boot.kernel.config.isYes "NET") (
           mkDefault (
             pkgs.writeText "etc-hosts" ''
@@ -395,80 +416,66 @@ in
         );
       };
 
+      # This mdev rule ensures all devices get their $MODALIAS value modprobed
+      # to allow for automatic kernel module loading.
+      mdev.rules = mkBefore ''
+        $MODALIAS=.* 0:0 660 @modprobe "$MODALIAS"
+      '';
+
       init = {
-        mixos-startup = {
+        # TODO(jared): find a way to remove this script
+        pre-mixos-startup = {
           action = "sysinit";
-          # TODO(jared): This script is currently not capable of doing error
-          # reporting. It would be nice if this logic was encoded in a proper
-          # program that logged to /dev/kmsg, then any logging would get picked
-          # up by klogd, which would then be forwarded to syslogd.
-          process = pkgs.writeScript "mixos-startup" ''
+          process = pkgs.writeScript "pre-mixos-startup" ''
             #!/bin/sh
-
-            # TODO: figure out automatic kernel module loading
-            ${concatMapStringsSep "\n" (module: ''
-              modprobe ${module}
-            '') config.boot.kernelModules}
-
-            # Create initial char/block nodes
-            mdev -f -s -S
-
-            # Create basic filesystems and setup read/write /etc
-            ${optionalString (config.boot.kernel.config.isYes "UNIX98_PTYS") ''
-              mkdir -p /dev/pts
-              mount -t devpts devpts -o nosuid,noexec /dev/pts
+            ${optionalString (config.boot.kernelModules != [ ]) ''
+              modprobe -a ${toString config.boot.kernelModules}
             ''}
-            ${optionalString (config.boot.kernel.config.isYes "CONFIGFS_FS") ''
-              mount -t configfs configfs -o nosuid,noexec,nodev /sys/kernel/config
-            ''}
-            ${optionalString (config.boot.kernel.config.isYes "DEBUG_FS_ALLOW_ALL") ''
-              mount -t debugfs debugfs -o nosuid,noexec,nodev /sys/kernel/debug
-            ''}
-            ${optionalString (config.boot.kernel.config.isYes "CGROUPS") ''
-              mount -t cgroup2 cgroup2 -o nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot /sys/fs/cgroup
-            ''}
-            ${optionalString (config.boot.kernel.config.isYes "SHMEM") ''
-              mkdir /dev/shm
-              mount -t tmpfs tmpfs -o nosuid,nodev /dev/shm
-            ''}
-
-            mount -t tmpfs tmpfs -o nosuid,nodev /tmp
-
-            # Mount state directory and bind to /var
-            ${
-              if config.state.enable then
-                ''
-                  ${config.state.init}
-                  ${mountState}
-                ''
-              else
-                ''
-                  mount -t tmpfs -o mode=755 tmpfs /state
-                ''
-            }
-            mkdir -p /state/var
-            mount -o bind /state/var /var
-
-            # Create /var/empty, useful in many contexts
-            mkdir -p /var/empty
-
-            mkdir -p /state/.etc/work /state/.etc/upper
-            mount -t overlay overlay -o lowerdir=/etc,upperdir=/state/.etc/upper,workdir=/state/.etc/work /etc
-
-            # Ensure basic state directories exist
-            mkdir -p /var/log
-            mkdir -p /var/spool/cron/crontabs
-
-            # Setup hostname
-            if [[ -f /etc/hostname ]]; then
-              hostname -F /etc/hostname
-            fi
-
-            ${optionalString (config.boot.kernel.config.isYes "NET") ''
-              # Setup loopback adapter
-              ip link set lo up
-            ''}
+            mdev -f -s
           '';
+        };
+
+        mixos-startup = {
+          tty = "console"; # Used so that state init output can be viewed
+          action = "sysinit";
+          deps = [ "pre-mixos-startup" ];
+          process = toString [
+            (getExe pkgs.mixos)
+            "sysinit"
+            ((pkgs.formats.json { }).generate "sysinit.json" {
+              boot = {
+                inherit (config.boot) kernelModules;
+                kernel = listToAttrs (
+                  map (option: nameValuePair option (config.boot.kernel.config.isYes option)) [
+                    "CGROUPS"
+                    "CONFIGFS_FS"
+                    "DEBUG_FS_ALLOW_ALL"
+                    "NET"
+                    "SHMEM"
+                    "UNIX98_PTYS"
+                  ]
+                );
+              };
+              state = {
+                where = "/state";
+              }
+              // (
+                if config.state.enable then
+                  {
+                    what = config.state.device;
+                    type = config.state.fsType;
+                    inherit (config.state) options init;
+                  }
+                else
+                  {
+                    what = "tmpfs";
+                    type = "tmpfs";
+                    options = [ "mode=755" ];
+                    init = null;
+                  }
+              );
+            })
+          ];
         };
 
         init = {
@@ -515,7 +522,8 @@ in
           inherit (config.mixos.testing) enable;
           action = "respawn";
           process = toString [
-            (getExe' pkgs.mixos "mixos-test-backdoor")
+            (getExe pkgs.mixos)
+            "test-backdoor"
             config.mixos.testing.port
           ];
         };
@@ -527,6 +535,7 @@ in
         "DEVTMPFS_MOUNT"
         "EROFS_FS"
         "EROFS_FS_ZIP_LZMA"
+        "FUTEX"
         "OVERLAY_FS"
         "RD_XZ"
         "TMPFS"
@@ -613,7 +622,7 @@ in
         compressor = "xz";
         contents = [
           {
-            source = getExe' pkgs.mixos "mixos-rdinit";
+            source = "${pkgs.mixos}/libexec/mixos-rdinit";
             target = "/init";
           }
           {

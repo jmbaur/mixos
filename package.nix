@@ -58,5 +58,8 @@ stdenvNoCC.mkDerivation {
     runHook postInstall
   '';
 
-  meta.platforms = lib.platforms.linux;
+  meta = {
+    platforms = lib.platforms.linux;
+    mainProgram = "mixos";
+  };
 }

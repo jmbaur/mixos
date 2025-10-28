@@ -1,4 +1,5 @@
 *.initrd
+*.qcow2
 .nixos-test-history
 /.direnv
 /.zig-cache

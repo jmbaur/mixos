@@ -12,8 +12,8 @@ pub fn build(b: *std.Build) void {
         .strip = true,
     });
 
-    const mixos_test_backdoor_exe_mod = b.createModule(.{
-        .root_source_file = b.path("src/test-backdoor.zig"),
+    const mixos_exe = b.createModule(.{
+        .root_source_file = b.path("src/mixos.zig"),
         .target = target,
         .optimize = optimize,
         .strip = true,
@@ -25,24 +25,29 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const mixos_init = b.addExecutable(.{
+    const mixos_rdinit = b.addExecutable(.{
         .name = "mixos-rdinit",
         .root_module = mixos_init_exe_mod,
     });
 
-    const mixos_test_backdoor = b.addExecutable(.{
-        .name = "mixos-test-backdoor",
-        .root_module = mixos_test_backdoor_exe_mod,
+    const install_rdinit = b.addInstallArtifact(mixos_rdinit, .{
+        .dest_dir = .{ .override = .{ .custom = "libexec" } },
     });
-    mixos_test_backdoor.linkLibC(); // for syslog() and friends
+    b.default_step.dependOn(&install_rdinit.step);
 
-    b.installArtifact(mixos_init);
-    b.installArtifact(mixos_test_backdoor);
+    const mixos = b.addExecutable(.{
+        .name = "mixos",
+        .root_module = mixos_exe,
+    });
+    mixos.linkLibC(); // for syslog() and friends
 
-    const run_cmd = b.addRunArtifact(mixos_test_backdoor);
+    b.installArtifact(mixos);
+
+    const run_cmd = b.addRunArtifact(mixos);
 
     run_cmd.step.dependOn(b.getInstallStep());
 
+    run_cmd.addArg("test-backdoor");
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
