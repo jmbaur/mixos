@@ -54,7 +54,7 @@ stdenvNoCC.mkDerivation {
 
   installPhase = ''
     runHook preInstall
-    zig build install --prefix $out ''${zigBuildFlags[@]}
+    zig build install -j$NIX_BUILD_CORES --prefix $out ''${zigBuildFlags[@]}
     runHook postInstall
   '';
 
