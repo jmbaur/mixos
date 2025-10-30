@@ -450,7 +450,7 @@ in
                     "CGROUPS"
                     "CONFIGFS_FS"
                     "DEBUG_FS_ALLOW_ALL"
-                    "NET"
+                    "UNIX" # implies CONFIG_NET
                     "SHMEM"
                     "UNIX98_PTYS"
                   ]

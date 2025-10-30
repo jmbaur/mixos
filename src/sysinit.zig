@@ -12,7 +12,7 @@ const KernelConfig = struct {
     CGROUPS: bool,
     CONFIGFS_FS: bool,
     DEBUG_FS_ALLOW_ALL: bool,
-    NET: bool,
+    UNIX: bool,
     SHMEM: bool,
     UNIX98_PTYS: bool,
 };
@@ -341,7 +341,7 @@ fn setupHostname(allocator: std.mem.Allocator) !void {
 }
 
 fn setupNetworking(kernel: *const KernelConfig) !void {
-    if (!kernel.NET) {
+    if (!kernel.UNIX) {
         return;
     }
 
