@@ -449,18 +449,23 @@ pub fn init(allocator: std.mem.Allocator) !Kmod {
     const modules_alias = try modules_alias_file.readToEndAlloc(allocator, std.math.maxInt(usize));
     errdefer allocator.free(modules_alias);
 
-    const modules_conf_file = try std.fs.cwd().openFile(MODULES_CONF, .{});
-    defer modules_conf_file.close();
+    const params: ParamIndex = b: {
+        if (std.fs.cwd().openFile(MODULES_CONF, .{})) |modules_conf_file| {
+            defer modules_conf_file.close();
 
-    {
-        var reader = modules_conf_file.reader(&reader_buf);
-        try appendAliases(&reader.interface, &aliases.writer);
-    }
+            {
+                var reader = modules_conf_file.reader(&reader_buf);
+                try appendAliases(&reader.interface, &aliases.writer);
+            }
 
-    const params = b: {
-        try modules_conf_file.seekTo(0); // reset position to zero so we can read again.
-        var reader = modules_conf_file.reader(&reader_buf);
-        break :b try buildParamIndex(allocator, &reader.interface);
+            {
+                try modules_conf_file.seekTo(0); // reset position to zero so we can read again.
+                var reader = modules_conf_file.reader(&reader_buf);
+                break :b try buildParamIndex(allocator, &reader.interface);
+            }
+        } else |_| {
+            break :b .init(allocator);
+        }
     };
 
     const module_index = try buildModuleIndex(allocator, modules_dep);
