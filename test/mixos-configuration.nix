@@ -4,6 +4,8 @@ let
   configfile = ./${pkgs.stdenv.hostPlatform.linuxArch}.config;
 in
 {
+  bin = [ pkgs.strace ];
+
   mixos.testing.enable = true;
 
   boot.kernel = pkgs.linuxKernel.manualConfig {
@@ -45,6 +47,10 @@ in
 
   etc."hostname".source = pkgs.writeText "hostname" ''
     mixos-test
+  '';
+
+  etc."modules.conf".source = pkgs.writeText "modules.conf" ''
+    options nvme-tcp wq_unbound=Y
   '';
 
   mdev.rules = ''

@@ -18,17 +18,88 @@ modules_dir: std.fs.Dir,
 /// modules.dep file contents
 modules_dep: []const u8,
 
-/// modules.alias file contents
-modules_alias: []const u8,
+/// Module aliases built from iterating through $MODULES_DIR/modules.alias and
+/// /etc/modules.conf.
+aliases: []const u8,
+
+/// Module parameters built from iterating through /etc/modules.conf. Can be
+/// overridden manually by specifying extra arguments on the command-line to
+/// modprobe/insmod.
+params: ParamIndex,
 
 /// Index into `modules_dep` based on module name
 module_index: ModuleIndex,
 
+const MODULES_CONF = "/etc/modules.conf";
 const MODULES_DIR = "/lib/modules";
 const MODULES_DEP = "modules.dep";
 const MODULES_ALIAS = "modules.alias";
 
 const ModuleIndex = std.StringArrayHashMap(usize);
+const ParamIndex = std.StringArrayHashMap([:0]const u8);
+
+fn buildParamIndex(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ParamIndex {
+    var params: ParamIndex = .init(allocator);
+    errdefer params.deinit();
+
+    while (true) {
+        const line = (reader.takeDelimiter('\n') catch break) orelse break;
+
+        var words = std.mem.tokenizeScalar(u8, line, ' ');
+
+        const first_word = words.next() orelse continue;
+        if (!std.mem.eql(u8, first_word, "options")) {
+            continue;
+        }
+
+        const module_name = words.next() orelse continue;
+
+        const first_param = words.next() orelse continue;
+        var module_params: std.Io.Writer.Allocating = .init(allocator);
+        errdefer module_params.deinit();
+
+        try module_params.writer.writeAll(first_param);
+        try module_params.writer.writeByte(' ');
+        while (words.next()) |other_param| {
+            try module_params.writer.writeAll(other_param);
+            try module_params.writer.writeByte(' ');
+        }
+        module_params.writer.undo(1);
+
+        try params.put(try allocator.dupe(u8, module_name), try module_params.toOwnedSliceSentinel(0));
+    }
+
+    return params;
+}
+
+test "buildParamIndex" {
+    const modules_conf =
+        \\options foo bar
+        \\options asdf
+        \\
+        \\# this is a comment
+        \\options nvme-tcp wq_unbound=Y
+    ;
+
+    {
+        var reader: std.Io.Reader = .fixed(modules_conf);
+        var index = try buildParamIndex(std.testing.allocator, &reader);
+        defer {
+            for (index.keys()) |key| {
+                std.testing.allocator.free(key);
+            }
+            for (index.values()) |value| {
+                std.testing.allocator.free(value);
+            }
+            index.deinit();
+        }
+
+        try std.testing.expectEqual(2, index.count());
+        try std.testing.expectEqual(null, index.get("asdf"));
+        try std.testing.expectEqualStrings("bar", index.get("foo") orelse unreachable);
+        try std.testing.expectEqualStrings("wq_unbound=Y", index.get("nvme-tcp") orelse unreachable);
+    }
+}
 
 fn buildModuleIndex(allocator: std.mem.Allocator, modules_dep: []const u8) !ModuleIndex {
     var reader: std.Io.Reader = .fixed(modules_dep);
@@ -51,31 +122,35 @@ fn buildModuleIndex(allocator: std.mem.Allocator, modules_dep: []const u8) !Modu
     return module_index;
 }
 
-fn findModuleOffset(
+const ModuleOffsets = std.AutoArrayHashMap(usize, void);
+
+fn findModuleOffsets(
     allocator: std.mem.Allocator,
     module_index: *ModuleIndex,
-    modules_alias: []const u8,
+    aliases: []const u8,
     module_query: []const u8,
-) !?usize {
+) !ModuleOffsets {
+    var offsets: ModuleOffsets = .init(allocator);
+    errdefer offsets.deinit();
+
     // If we find the module by the exact name, then we are done.
     if (module_index.get(module_query)) |offset| {
-        return offset;
+        try offsets.put(offset, void{});
+        return offsets;
     }
 
     // Otherwise, we need to look the module up by alias
-    var reader: std.Io.Reader = .fixed(modules_alias);
+    var alias_reader: std.Io.Reader = .fixed(aliases);
     while (true) {
-        const line = (reader.takeDelimiter('\n') catch return null) orelse return null;
+        const line = (alias_reader.takeDelimiter('\n') catch break) orelse break;
 
-        var words = std.mem.splitScalar(u8, line, ' ');
+        var words = std.mem.tokenizeScalar(u8, line, ' ');
 
-        const first_word = words.next() orelse return null;
-        if (!std.mem.eql(u8, first_word, "alias")) {
+        const pattern = words.next() orelse continue;
+        const module_name = words.next() orelse continue;
+        if (words.next() != null) {
             continue;
         }
-
-        const pattern = words.next() orelse return null;
-        const module_name = words.next() orelse return null;
 
         const patternZ = try allocator.dupeZ(u8, pattern);
         defer allocator.free(patternZ);
@@ -87,112 +162,114 @@ fn findModuleOffset(
             continue;
         }
 
-        return module_index.get(module_name);
+        if (module_index.get(module_name)) |offset| {
+            try offsets.put(offset, void{});
+        }
     }
 
-    return null;
+    return offsets;
 }
 
-test "findModuleOffset" {
-    const modules_alias =
-        \\alias pci:v00008086d00000953sv*sd*bc*sc*i* nvme
-        \\alias pci:v00008086d00000A53sv*sd*bc*sc*i* nvme
-        \\alias pci:v00008086d00000A54sv*sd*bc*sc*i* nvme
-        \\alias pci:v00008086d00000A55sv*sd*bc*sc*i* nvme
-        \\alias pci:v00008086d0000F1A5sv*sd*bc*sc*i* nvme
-        \\alias pci:v00008086d0000F1A6sv*sd*bc*sc*i* nvme
-        \\alias pci:v00008086d00005845sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001B36d00000010sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001217d00008760sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000126Fd00001001sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000126Fd00002262sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000126Fd00002263sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001BB1d00000100sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001C58d00000003sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001C58d00000023sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001C5Fd00000540sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000144Dd0000A821sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000144Dd0000A822sv*sd*bc*sc*i* nvme
-        \\alias pci:v000015B7d00005008sv*sd*bc*sc*i* nvme
-        \\alias pci:v000015B7d00005009sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001987d00005012sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001987d00005016sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001987d00005019sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001987d00005021sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001B4Bd00001092sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001CC1d000033F8sv*sd*bc*sc*i* nvme
-        \\alias pci:v000010ECd00005762sv*sd*bc*sc*i* nvme
-        \\alias pci:v000010ECd00005763sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001CC1d00008201sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001344d00005407sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001344d00006001sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001C5Cd00001504sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001C5Cd0000174Asv*sd*bc*sc*i* nvme
-        \\alias pci:v00001C5Cd00001D59sv*sd*bc*sc*i* nvme
-        \\alias pci:v000015B7d00002001sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D97d00002263sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000144Dd0000A80Bsv*sd*bc*sc*i* nvme
-        \\alias pci:v0000144Dd0000A809sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000144Dd0000A802sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001CC4d00006303sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001CC4d00006302sv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d00002262sv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d00002263sv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d00005013sv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d00005018sv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d00005016sv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d0000501Asv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d0000501Bsv*sd*bc*sc*i* nvme
-        \\alias pci:v00002646d0000501Esv*sd*bc*sc*i* nvme
-        \\alias pci:v00001F40d00001202sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001F40d00005236sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001E4Bd00001001sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001E4Bd00001002sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001E4Bd00001202sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001E4Bd00001602sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001CC1d00005350sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001DBEd00005216sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001DBEd00005236sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001E49d00000021sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001E49d00000041sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000025Ed0000F1ACsv*sd*bc*sc*i* nvme
-        \\alias pci:v0000C0A9d0000540Asv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D97d00001D97sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D97d00002269sv*sd*bc*sc*i* nvme
-        \\alias pci:v000010ECd00005765sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D0Fd00000061sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D0Fd00000065sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D0Fd00008061sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D0Fd0000CD00sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D0Fd0000CD01sv*sd*bc*sc*i* nvme
-        \\alias pci:v00001D0Fd0000CD02sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000106Bd00002001sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000106Bd00002003sv*sd*bc*sc*i* nvme
-        \\alias pci:v0000106Bd00002005sv*sd*bc*sc*i* nvme
-        \\alias pci:v*d*sv*sd*bc01sc08i02* nvme
-        \\alias ipt_addrtype xt_addrtype
-        \\alias ip6t_addrtype xt_addrtype
-        \\alias ipt_mark xt_mark
-        \\alias ip6t_mark xt_mark
-        \\alias ipt_MARK xt_mark
-        \\alias ip6t_MARK xt_mark
-        \\alias arpt_MARK xt_mark
-        \\alias fs-efivarfs efivarfs
-        \\alias ip6t_MASQUERADE xt_MASQUERADE
-        \\alias ipt_MASQUERADE xt_MASQUERADE
-        \\alias ipt_LOG xt_LOG
-        \\alias ip6t_LOG xt_LOG
-        \\alias nf_log_arp nf_log_syslog
-        \\alias nf_log_bridge nf_log_syslog
-        \\alias nf_log_ipv4 nf_log_syslog
-        \\alias nf_log_ipv6 nf_log_syslog
-        \\alias nf_log_netdev nf_log_syslog
-        \\alias nf-logger-7-0 nf_log_syslog
-        \\alias nf-logger-2-0 nf_log_syslog
-        \\alias nf-logger-3-0 nf_log_syslog
-        \\alias nf-logger-5-0 nf_log_syslog
-        \\alias nf-logger-10-0 nf_log_syslog
-        \\alias cpu:type:x86,ven0000fam*mod*:feature:*01C6* x86_pkg_temp_thermal
+test "findModuleOffsets" {
+    const aliases =
+        \\pci:v00008086d00000953sv*sd*bc*sc*i* nvme
+        \\pci:v00008086d00000A53sv*sd*bc*sc*i* nvme
+        \\pci:v00008086d00000A54sv*sd*bc*sc*i* nvme
+        \\pci:v00008086d00000A55sv*sd*bc*sc*i* nvme
+        \\pci:v00008086d0000F1A5sv*sd*bc*sc*i* nvme
+        \\pci:v00008086d0000F1A6sv*sd*bc*sc*i* nvme
+        \\pci:v00008086d00005845sv*sd*bc*sc*i* nvme
+        \\pci:v00001B36d00000010sv*sd*bc*sc*i* nvme
+        \\pci:v00001217d00008760sv*sd*bc*sc*i* nvme
+        \\pci:v0000126Fd00001001sv*sd*bc*sc*i* nvme
+        \\pci:v0000126Fd00002262sv*sd*bc*sc*i* nvme
+        \\pci:v0000126Fd00002263sv*sd*bc*sc*i* nvme
+        \\pci:v00001BB1d00000100sv*sd*bc*sc*i* nvme
+        \\pci:v00001C58d00000003sv*sd*bc*sc*i* nvme
+        \\pci:v00001C58d00000023sv*sd*bc*sc*i* nvme
+        \\pci:v00001C5Fd00000540sv*sd*bc*sc*i* nvme
+        \\pci:v0000144Dd0000A821sv*sd*bc*sc*i* nvme
+        \\pci:v0000144Dd0000A822sv*sd*bc*sc*i* nvme
+        \\pci:v000015B7d00005008sv*sd*bc*sc*i* nvme
+        \\pci:v000015B7d00005009sv*sd*bc*sc*i* nvme
+        \\pci:v00001987d00005012sv*sd*bc*sc*i* nvme
+        \\pci:v00001987d00005016sv*sd*bc*sc*i* nvme
+        \\pci:v00001987d00005019sv*sd*bc*sc*i* nvme
+        \\pci:v00001987d00005021sv*sd*bc*sc*i* nvme
+        \\pci:v00001B4Bd00001092sv*sd*bc*sc*i* nvme
+        \\pci:v00001CC1d000033F8sv*sd*bc*sc*i* nvme
+        \\pci:v000010ECd00005762sv*sd*bc*sc*i* nvme
+        \\pci:v000010ECd00005763sv*sd*bc*sc*i* nvme
+        \\pci:v00001CC1d00008201sv*sd*bc*sc*i* nvme
+        \\pci:v00001344d00005407sv*sd*bc*sc*i* nvme
+        \\pci:v00001344d00006001sv*sd*bc*sc*i* nvme
+        \\pci:v00001C5Cd00001504sv*sd*bc*sc*i* nvme
+        \\pci:v00001C5Cd0000174Asv*sd*bc*sc*i* nvme
+        \\pci:v00001C5Cd00001D59sv*sd*bc*sc*i* nvme
+        \\pci:v000015B7d00002001sv*sd*bc*sc*i* nvme
+        \\pci:v00001D97d00002263sv*sd*bc*sc*i* nvme
+        \\pci:v0000144Dd0000A80Bsv*sd*bc*sc*i* nvme
+        \\pci:v0000144Dd0000A809sv*sd*bc*sc*i* nvme
+        \\pci:v0000144Dd0000A802sv*sd*bc*sc*i* nvme
+        \\pci:v00001CC4d00006303sv*sd*bc*sc*i* nvme
+        \\pci:v00001CC4d00006302sv*sd*bc*sc*i* nvme
+        \\pci:v00002646d00002262sv*sd*bc*sc*i* nvme
+        \\pci:v00002646d00002263sv*sd*bc*sc*i* nvme
+        \\pci:v00002646d00005013sv*sd*bc*sc*i* nvme
+        \\pci:v00002646d00005018sv*sd*bc*sc*i* nvme
+        \\pci:v00002646d00005016sv*sd*bc*sc*i* nvme
+        \\pci:v00002646d0000501Asv*sd*bc*sc*i* nvme
+        \\pci:v00002646d0000501Bsv*sd*bc*sc*i* nvme
+        \\pci:v00002646d0000501Esv*sd*bc*sc*i* nvme
+        \\pci:v00001F40d00001202sv*sd*bc*sc*i* nvme
+        \\pci:v00001F40d00005236sv*sd*bc*sc*i* nvme
+        \\pci:v00001E4Bd00001001sv*sd*bc*sc*i* nvme
+        \\pci:v00001E4Bd00001002sv*sd*bc*sc*i* nvme
+        \\pci:v00001E4Bd00001202sv*sd*bc*sc*i* nvme
+        \\pci:v00001E4Bd00001602sv*sd*bc*sc*i* nvme
+        \\pci:v00001CC1d00005350sv*sd*bc*sc*i* nvme
+        \\pci:v00001DBEd00005216sv*sd*bc*sc*i* nvme
+        \\pci:v00001DBEd00005236sv*sd*bc*sc*i* nvme
+        \\pci:v00001E49d00000021sv*sd*bc*sc*i* nvme
+        \\pci:v00001E49d00000041sv*sd*bc*sc*i* nvme
+        \\pci:v0000025Ed0000F1ACsv*sd*bc*sc*i* nvme
+        \\pci:v0000C0A9d0000540Asv*sd*bc*sc*i* nvme
+        \\pci:v00001D97d00001D97sv*sd*bc*sc*i* nvme
+        \\pci:v00001D97d00002269sv*sd*bc*sc*i* nvme
+        \\pci:v000010ECd00005765sv*sd*bc*sc*i* nvme
+        \\pci:v00001D0Fd00000061sv*sd*bc*sc*i* nvme
+        \\pci:v00001D0Fd00000065sv*sd*bc*sc*i* nvme
+        \\pci:v00001D0Fd00008061sv*sd*bc*sc*i* nvme
+        \\pci:v00001D0Fd0000CD00sv*sd*bc*sc*i* nvme
+        \\pci:v00001D0Fd0000CD01sv*sd*bc*sc*i* nvme
+        \\pci:v00001D0Fd0000CD02sv*sd*bc*sc*i* nvme
+        \\pci:v0000106Bd00002001sv*sd*bc*sc*i* nvme
+        \\pci:v0000106Bd00002003sv*sd*bc*sc*i* nvme
+        \\pci:v0000106Bd00002005sv*sd*bc*sc*i* nvme
+        \\pci:v*d*sv*sd*bc01sc08i02* nvme
+        \\ipt_addrtype xt_addrtype
+        \\ip6t_addrtype xt_addrtype
+        \\ipt_mark xt_mark
+        \\ip6t_mark xt_mark
+        \\ipt_MARK xt_mark
+        \\ip6t_MARK xt_mark
+        \\arpt_MARK xt_mark
+        \\fs-efivarfs efivarfs
+        \\ip6t_MASQUERADE xt_MASQUERADE
+        \\ipt_MASQUERADE xt_MASQUERADE
+        \\ipt_LOG xt_LOG
+        \\ip6t_LOG xt_LOG
+        \\nf_log_arp nf_log_syslog
+        \\nf_log_bridge nf_log_syslog
+        \\nf_log_ipv4 nf_log_syslog
+        \\nf_log_ipv6 nf_log_syslog
+        \\nf_log_netdev nf_log_syslog
+        \\nf-logger-7-0 nf_log_syslog
+        \\nf-logger-2-0 nf_log_syslog
+        \\nf-logger-3-0 nf_log_syslog
+        \\nf-logger-5-0 nf_log_syslog
+        \\nf-logger-10-0 nf_log_syslog
+        \\cpu:type:x86,ven0000fam*mod*:feature:*01C6* x86_pkg_temp_thermal
     ;
 
     const uncompressed_modules_dep =
@@ -215,47 +292,71 @@ test "findModuleOffset" {
         var module_index = try buildModuleIndex(std.testing.allocator, uncompressed_modules_dep);
         defer module_index.deinit();
 
-        try std.testing.expectEqual(0, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "nvme",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "nvme",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{0}, offsets.keys());
+        }
 
-        try std.testing.expectEqual(72, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "xt_addrtype",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "xt_addrtype",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{72}, offsets.keys());
+        }
 
-        try std.testing.expectEqual(109, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "xt_mark",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "xt_mark",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{109}, offsets.keys());
+        }
 
-        try std.testing.expectEqual(584, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "nvme-fabrics",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "nvme-fabrics",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{584}, offsets.keys());
+        }
 
-        try std.testing.expectEqual(142, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "fs-efivarfs",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "fs-efivarfs",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{142}, offsets.keys());
+        }
 
-        try std.testing.expectEqual(530, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "cpu:type:x86,ven0000fam0mod0:feature:,01C6,",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "cpu:type:x86,ven0000fam0mod0:feature:,01C6,",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{530}, offsets.keys());
+        }
     }
 
     const increase = std.mem.replacementSize(u8, uncompressed_modules_dep, ".ko", ".ko.xz");
@@ -268,47 +369,52 @@ test "findModuleOffset" {
         var module_index = try buildModuleIndex(std.testing.allocator, compressed_modules_dep);
         defer module_index.deinit();
 
-        try std.testing.expectEqual(0, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "nvme",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "nvme",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{0}, offsets.keys());
+        }
 
-        try std.testing.expectEqual(78, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "xt_addrtype",
-        ) orelse unreachable);
+        {
+            var offsets = try findModuleOffsets(
+                std.testing.allocator,
+                &module_index,
+                aliases,
+                "cpu:type:x86,ven0000fam0mod0:feature:,01C6,",
+            );
+            defer offsets.deinit();
+            try std.testing.expectEqualSlices(usize, &.{572}, offsets.keys());
+        }
+    }
+}
 
-        try std.testing.expectEqual(118, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "xt_mark",
-        ) orelse unreachable);
+fn appendAliases(reader: *std.Io.Reader, writer: *std.Io.Writer) !void {
+    while (true) {
+        const line = (reader.takeDelimiter('\n') catch break) orelse break;
 
-        try std.testing.expectEqual(629, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "nvme-fabrics",
-        ) orelse unreachable);
+        var words = std.mem.tokenizeScalar(u8, line, ' ');
 
-        try std.testing.expectEqual(154, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "fs-efivarfs",
-        ) orelse unreachable);
+        const first_word = words.next() orelse continue;
+        if (!std.mem.eql(u8, first_word, "alias")) {
+            continue;
+        }
 
-        try std.testing.expectEqual(572, try findModuleOffset(
-            std.testing.allocator,
-            &module_index,
-            modules_alias,
-            "cpu:type:x86,ven0000fam0mod0:feature:,01C6,",
-        ) orelse unreachable);
+        const pattern = words.next() orelse continue;
+        const module_name = words.next() orelse continue;
+        if (words.next() != null) {
+            log.debug("invalid alias line: '{s}'", .{line});
+            continue;
+        }
+
+        try writer.writeAll(pattern);
+        try writer.writeByte(' ');
+        try writer.writeAll(module_name);
+        try writer.writeByte('\n');
     }
 }
 
@@ -330,10 +436,32 @@ pub fn init(allocator: std.mem.Allocator) !Kmod {
     const modules_dep = try modules_dep_file.readToEndAlloc(allocator, std.math.maxInt(usize));
     errdefer allocator.free(modules_dep);
 
+    var aliases: std.Io.Writer.Allocating = .init(allocator);
+    errdefer aliases.deinit();
+
     const modules_alias_file = try modules_dir.openFile(MODULES_ALIAS, .{});
     defer modules_alias_file.close();
+
+    var reader_buf = [_]u8{0} ** 1024;
+    var modules_alias_file_reader = modules_alias_file.reader(&reader_buf);
+    try appendAliases(&modules_alias_file_reader.interface, &aliases.writer);
+
     const modules_alias = try modules_alias_file.readToEndAlloc(allocator, std.math.maxInt(usize));
     errdefer allocator.free(modules_alias);
+
+    const modules_conf_file = try std.fs.cwd().openFile(MODULES_CONF, .{});
+    defer modules_conf_file.close();
+
+    {
+        var reader = modules_conf_file.reader(&reader_buf);
+        try appendAliases(&reader.interface, &aliases.writer);
+    }
+
+    const params = b: {
+        try modules_conf_file.seekTo(0); // reset position to zero so we can read again.
+        var reader = modules_conf_file.reader(&reader_buf);
+        break :b try buildParamIndex(allocator, &reader.interface);
+    };
 
     const module_index = try buildModuleIndex(allocator, modules_dep);
 
@@ -341,7 +469,8 @@ pub fn init(allocator: std.mem.Allocator) !Kmod {
         .allocator = allocator,
         .modules_dir = modules_dir,
         .modules_dep = modules_dep,
-        .modules_alias = modules_alias,
+        .aliases = try aliases.toOwnedSlice(),
+        .params = params,
         .module_index = module_index,
     };
 }
@@ -350,16 +479,28 @@ pub fn deinit(self: *Kmod) void {
     self.modules_dir.close();
     self.module_index.deinit();
     self.allocator.free(self.modules_dep);
-    self.allocator.free(self.modules_alias);
+    self.allocator.free(self.aliases);
+    for (self.params.values()) |value| {
+        self.allocator.free(value);
+    }
+    for (self.params.keys()) |key| {
+        self.allocator.free(key);
+    }
+    self.params.deinit();
 }
 
 fn finit_module(
     fd: std.posix.fd_t,
     module_display: []const u8,
-    params: ?[:0]const u8,
+    params: [:0]const u8,
     flags: usize,
 ) !void {
-    switch (system.E.init(std.os.linux.syscall3(.finit_module, @intCast(fd), @intFromPtr(&params), flags))) {
+    switch (system.E.init(std.os.linux.syscall3(
+        .finit_module,
+        @intCast(fd),
+        @intFromPtr(params.ptr),
+        flags,
+    ))) {
         .SUCCESS, .EXIST => {},
         else => |err| {
             log.err(
@@ -381,7 +522,7 @@ fn finit_module(
 pub fn insmod(
     self: *Kmod,
     module_filepath: []const u8,
-    params: ?[:0]const u8,
+    override_params: ?[:0]const u8,
 ) !void {
     const module_basename = std.fs.path.basename(module_filepath);
     const module_stem = std.fs.path.stem(module_basename);
@@ -394,63 +535,83 @@ pub fn insmod(
 
     var flags: usize = 0;
 
-    var buf = [_]u8{0} ** @max(
+    var module_buf = [_]u8{0} ** @max(
         @sizeOf(std.elf.Elf64_Ehdr),
         @sizeOf(std.elf.Elf32_Ehdr),
     );
-    var reader = module_file.reader(&buf);
+    var reader = module_file.reader(&module_buf);
     if (std.elf.Header.read(&reader.interface)) |_| {} else |_| {
         // If the module is not a valid ELF file, we assume it is compressed.
         flags |= c.MODULE_INIT_COMPRESSED_FILE;
     }
 
-    try finit_module(module_file.handle, module_display, params, flags);
+    const params = b: {
+        if (override_params) |params| {
+            break :b params;
+        } else if (self.params.get(module_display)) |params| {
+            break :b params;
+        } else {
+            break :b "";
+        }
+    };
+
+    try finit_module(
+        module_file.handle,
+        module_display,
+        params,
+        flags,
+    );
 }
 
 /// Load a kernel module given a module name (or alias) as well as optional
-/// module parameters.
-///
-/// TODO(jared): Consume /etc/modules.conf (documented as working in busybox,
-/// though never implemented anywhere). This will allow for customizing module
-/// parameters for all modules, not just the top-level module being loaded, but
-/// all transitive modules as well.
+/// module parameters. If override_params is non-null, the module is
+/// initialized with those params, otherwise params from /etc/modules.conf are
+/// used. This allows for customizing module parameters for all modules, not
+/// just the top-level module being loaded, but all transitive modules as well.
 pub fn modprobe(self: *Kmod, module_query: []const u8, override_params: ?[]const u8) !void {
-    const offset = try findModuleOffset(
+    var offsets = try findModuleOffsets(
         self.allocator,
         &self.module_index,
-        self.modules_alias,
+        self.aliases,
         module_query,
-    ) orelse return error.UnknownModule;
-
-    var reader: std.Io.Reader = .fixed(self.modules_dep[offset..]);
-
-    const module_filepath = std.mem.trim(
-        u8,
-        try reader.takeDelimiter(':') orelse return error.InvalidModuleDep,
-        &std.ascii.whitespace,
     );
+    defer offsets.deinit();
 
-    const dependencies = std.mem.trim(
-        u8,
-        try reader.takeDelimiter('\n') orelse return error.InvalidModuleDep,
-        &std.ascii.whitespace,
-    );
-
-    if (dependencies.len > 0) {
-        // Module dependencies should be loaded in reverse order, so we iterate
-        // over the dependencies starting from the end.
-        var dep_split = std.mem.splitBackwardsScalar(u8, dependencies, ' ');
-        while (dep_split.next()) |dep| {
-            try self.insmod(dep, null);
-        }
+    if (offsets.count() == 0) {
+        return error.UnknownModule;
     }
 
-    if (override_params) |params| {
-        const paramsZ = try self.allocator.dupeZ(u8, params);
-        defer self.allocator.free(paramsZ);
+    for (offsets.keys()) |offset| {
+        var reader: std.Io.Reader = .fixed(self.modules_dep[offset..]);
 
-        try self.insmod(module_filepath, paramsZ);
-    } else {
-        try self.insmod(module_filepath, null);
+        const module_filepath = std.mem.trim(
+            u8,
+            try reader.takeDelimiter(':') orelse return error.InvalidModuleDep,
+            &std.ascii.whitespace,
+        );
+
+        const dependencies = std.mem.trim(
+            u8,
+            try reader.takeDelimiter('\n') orelse return error.InvalidModuleDep,
+            &std.ascii.whitespace,
+        );
+
+        if (dependencies.len > 0) {
+            // Module dependencies should be loaded in reverse order, so we iterate
+            // over the dependencies starting from the end.
+            var dep_split = std.mem.splitBackwardsScalar(u8, dependencies, ' ');
+            while (dep_split.next()) |dep| {
+                try self.insmod(dep, null);
+            }
+        }
+
+        if (override_params) |params| {
+            const paramsZ = try self.allocator.dupeZ(u8, params);
+            defer self.allocator.free(paramsZ);
+
+            try self.insmod(module_filepath, paramsZ);
+        } else {
+            try self.insmod(module_filepath, null);
+        }
     }
 }

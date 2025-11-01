@@ -11,7 +11,7 @@ const LOOP_SET_FD = 0x4C00;
 const LOOP_CTL_GET_FREE = 0x4C82;
 
 fn find_cmdline(cmdline: []const u8, want_key: []const u8) ?[]const u8 {
-    var entry_split = std.mem.splitSequence(u8, cmdline, &std.ascii.whitespace);
+    var entry_split = std.mem.tokenizeSequence(u8, cmdline, &std.ascii.whitespace);
     while (entry_split.next()) |entry| {
         var split = std.mem.splitScalar(u8, entry, '=');
         const key = split.next() orelse continue;

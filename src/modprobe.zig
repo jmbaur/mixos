@@ -3,7 +3,7 @@ const Kmod = @import("./kmod.zig");
 
 /// Returns a tuple of the module name and the parameters to load the module
 /// with. Caller is responsible for freeing the params buffer.
-fn parseArgs(allocator: std.mem.Allocator, args: anytype) !std.meta.Tuple(&.{ []const u8, []const u8 }) {
+fn parseArgs(allocator: std.mem.Allocator, args: anytype) !std.meta.Tuple(&.{ []const u8, [:0]const u8 }) {
     var maybe_module_query: ?[]const u8 = null;
 
     while (args.next()) |arg| {
@@ -25,10 +25,12 @@ fn parseArgs(allocator: std.mem.Allocator, args: anytype) !std.meta.Tuple(&.{ []
         try params.writer.writeByte(' ');
     }
 
-    // remove potentially trailing whitespace
+    // Remove potential trailing whitespace
+    //
+    // TODO(jared): std.Io.Writer.undo() _should_ do saturating subtraction, but it doesn't.
     params.writer.end -|= 1;
 
-    return .{ module_query, try params.toOwnedSlice() };
+    return .{ module_query, try params.toOwnedSliceSentinel(0) };
 }
 
 test "parseArgs" {
