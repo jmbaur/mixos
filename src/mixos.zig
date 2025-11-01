@@ -11,8 +11,8 @@ pub fn main() !void {
 
     var i: usize = 0;
     while (i < 2) : (i += 1) {
-        if (std.mem.eql(u8, name, "mixos")) {
-            name = args.next() orelse return error.MissingArgs;
+        if (i == 0 and std.mem.eql(u8, name, "mixos")) {
+            name = args.next() orelse return error.MissingCommand;
             continue;
         } else if (std.mem.eql(u8, name, "sysinit")) {
             return sysinit.mixosMain(&args);
@@ -21,7 +21,9 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, name, "test-backdoor")) {
             return test_backdoor.mixosMain(&args);
         } else {
-            return error.InvalidArgs;
+            break;
         }
     }
+
+    return error.UnknownCommand;
 }
