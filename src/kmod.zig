@@ -378,7 +378,7 @@ fn finit_module(
     }
 }
 
-fn insmod(
+pub fn insmod(
     self: *Kmod,
     module_filepath: []const u8,
     params: ?[:0]const u8,

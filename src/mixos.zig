@@ -1,5 +1,6 @@
 const std = @import("std");
 const sysinit = @import("./sysinit.zig");
+const insmod = @import("./insmod.zig");
 const modprobe = @import("./modprobe.zig");
 const test_backdoor = @import("./test-backdoor.zig");
 
@@ -16,6 +17,8 @@ pub fn main() !void {
             continue;
         } else if (std.mem.eql(u8, name, "sysinit")) {
             return sysinit.mixosMain(&args);
+        } else if (std.mem.eql(u8, name, "insmod")) {
+            return insmod.mixosMain(&args);
         } else if (std.mem.eql(u8, name, "modprobe")) {
             return modprobe.mixosMain(&args);
         } else if (std.mem.eql(u8, name, "test-backdoor")) {

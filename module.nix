@@ -429,7 +429,7 @@ in
       # This mdev rule ensures all devices get their $MODALIAS value modprobed
       # to allow for automatic kernel module loading.
       mdev.rules = mkBefore ''
-        $MODALIAS=.* 0:0 660 @mixos modprobe "$MODALIAS"
+        $MODALIAS=.* 0:0 660 @modprobe "$MODALIAS"
       '';
 
       init = {

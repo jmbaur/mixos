@@ -326,9 +326,9 @@ test "extractHostname" {
 // /etc/hostname is described as a single-line, newline-terminated file
 // containing the hostname of the system, see hostname(5).
 fn setupHostname(allocator: std.mem.Allocator) !void {
-    const hostname_file = std.fs.cwd().openFile("/etc/hostname", .{}) catch |err| {
-        log.debug("failed to open /etc/hostname: {}", .{err});
-        return;
+    const hostname_file = std.fs.cwd().openFile("/etc/hostname", .{}) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
     };
     defer hostname_file.close();
 
@@ -389,20 +389,6 @@ fn setupModprobeAndLoadModules(
     if (!kernel.MODULES) {
         return;
     }
-
-    var self_exe_buf = [_]u8{0} ** std.fs.max_path_bytes;
-    const self_exe = try std.fs.cwd().realpath("/proc/self/exe", &self_exe_buf);
-    const modprobe_path = "/run/mixos/modprobe";
-    try std.fs.cwd().makePath("/run/mixos");
-    try std.fs.cwd().symLink(self_exe, modprobe_path, .{});
-
-    if (std.fs.cwd().openFile(
-        "/proc/sys/kernel/modprobe",
-        .{ .mode = .write_only },
-    )) |modprobe_sysctl| {
-        defer modprobe_sysctl.close();
-        try modprobe_sysctl.writeAll(modprobe_path ++ "\n");
-    } else |_| {}
 
     var kmod = Kmod.init(allocator) catch |err| switch (err) {
         error.NoModules => return,

@@ -55,6 +55,9 @@ stdenvNoCC.mkDerivation {
   installPhase = ''
     runHook preInstall
     zig build install -j$NIX_BUILD_CORES --prefix $out ''${zigBuildFlags[@]}
+    for symlink in modprobe insmod; do
+      ln -sf $out/bin/mixos $out/bin/$symlink
+    done
     runHook postInstall
   '';
 

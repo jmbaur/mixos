@@ -1,5 +1,6 @@
 test {
     _ = @import("./fs.zig");
+    _ = @import("./insmod.zig");
     _ = @import("./kmod.zig");
     _ = @import("./kmsg.zig");
     _ = @import("./mixos.zig");
