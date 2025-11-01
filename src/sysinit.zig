@@ -1,6 +1,7 @@
 const std = @import("std");
 const system = std.posix.system;
 const kmsg = @import("./kmsg.zig");
+const Kmod = @import("./kmod.zig");
 const fs = @import("./fs.zig");
 const MS = std.os.linux.MS;
 
@@ -12,9 +13,10 @@ const KernelConfig = struct {
     CGROUPS: bool,
     CONFIGFS_FS: bool,
     DEBUG_FS_ALLOW_ALL: bool,
-    UNIX: bool,
+    MODULES: bool,
     SHMEM: bool,
     UNIX98_PTYS: bool,
+    UNIX: bool,
 };
 
 const BootConfig = struct {
@@ -135,6 +137,7 @@ fn parseStringMountOptions(options: []const []const u8, data_writer: *std.Io.Wri
                 try data_writer.writeByte(',');
             }
             try data_writer.writeAll(option);
+            try data_writer.flush();
         }
     }
 
@@ -378,6 +381,53 @@ fn setupNetworking(kernel: *const KernelConfig) !void {
     }
 }
 
+fn setupModprobeAndLoadModules(
+    allocator: std.mem.Allocator,
+    kernel: *const KernelConfig,
+    modules: []const []const u8,
+) !void {
+    if (!kernel.MODULES) {
+        return;
+    }
+
+    var self_exe_buf = [_]u8{0} ** std.fs.max_path_bytes;
+    const self_exe = try std.fs.cwd().realpath("/proc/self/exe", &self_exe_buf);
+    const modprobe_path = "/run/mixos/modprobe";
+    try std.fs.cwd().makePath("/run/mixos");
+    try std.fs.cwd().symLink(self_exe, modprobe_path, .{});
+
+    if (std.fs.cwd().openFile(
+        "/proc/sys/kernel/modprobe",
+        .{ .mode = .write_only },
+    )) |modprobe_sysctl| {
+        defer modprobe_sysctl.close();
+        try modprobe_sysctl.writeAll(modprobe_path ++ "\n");
+    } else |_| {}
+
+    var kmod = Kmod.init(allocator) catch |err| switch (err) {
+        error.NoModules => return,
+        else => return err,
+    };
+    defer kmod.deinit();
+
+    for (modules) |module| {
+        kmod.modprobe(module, null) catch |err| {
+            log.err("failed to load module {s}: {}", .{ module, err });
+        };
+    }
+}
+
+fn mdevScan(allocator: std.mem.Allocator) !void {
+    var child = std.process.Child.init(&.{ "mdev", "-s", "-f" }, allocator);
+    const term = try child.spawnAndWait();
+    switch (term) {
+        .Exited => |code| if (code == 0) return,
+        else => {},
+    }
+
+    log.err("mdev failed with exit: {}", .{term});
+}
+
 pub fn mixosMain(args: *std.process.ArgIterator) !void {
     // We log to /dev/kmsg in sysinit since at this point in time syslogd is
     // not yet started. The klogd process will pick up our userspace logs sent
@@ -399,6 +449,12 @@ pub fn mixosMain(args: *std.process.ArgIterator) !void {
     const sysinit_config = try std.json.parseFromSlice(SysinitConfig, allocator, sysinit_json_contents, .{});
 
     mountFilesystems(&sysinit_config.value.boot.kernel);
+
+    try setupModprobeAndLoadModules(allocator, &sysinit_config.value.boot.kernel, sysinit_config.value.boot.kernelModules);
+
+    mdevScan(allocator) catch |err| {
+        log.err("failed to run mdev: {}", .{err});
+    };
 
     initAndSetupState(allocator, &sysinit_config.value.state) catch |err| {
         log.err("failed to mount /state: {}", .{err});

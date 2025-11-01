@@ -39,7 +39,7 @@ pub fn build(b: *std.Build) void {
         .name = "mixos",
         .root_module = mixos_exe,
     });
-    mixos.linkLibC(); // for syslog() and friends
+    mixos.linkLibC();
 
     b.installArtifact(mixos);
 
@@ -58,6 +58,7 @@ pub fn build(b: *std.Build) void {
     const unit_tests = b.addTest(.{
         .root_module = unit_tests_mod,
     });
+    unit_tests.linkLibC();
 
     const run_exe_unit_tests = b.addRunArtifact(unit_tests);
 

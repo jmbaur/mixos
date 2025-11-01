@@ -11,6 +11,8 @@ in
     inherit configfile;
   };
 
+  boot.kernelModules = [ "nvme-tcp" ];
+
   state = {
     enable = true;
     fsType = "ext2";

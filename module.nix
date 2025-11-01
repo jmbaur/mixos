@@ -45,7 +45,13 @@ let
 
   bin = pkgs.buildEnv {
     name = "mixos-bin";
-    paths = map getBin (config.bin ++ [ pkgs.busybox ]);
+    paths = map getBin (
+      config.bin
+      ++ [
+        pkgs.busybox
+        pkgs.mixos
+      ]
+    );
     pathsToLink = [ "/bin" ];
   };
 
@@ -393,6 +399,10 @@ in
               )}'';
           }
         )
+        {
+          assertion = config.boot.kernelModules != [ ] -> config.boot.kernel.config.isYes "MODULES";
+          message = "Cannot declare kernel modules be loaded at runtime without having CONFIG_MODULES=y set in the kernel config";
+        }
       ];
     }
     {
@@ -419,26 +429,13 @@ in
       # This mdev rule ensures all devices get their $MODALIAS value modprobed
       # to allow for automatic kernel module loading.
       mdev.rules = mkBefore ''
-        $MODALIAS=.* 0:0 660 @modprobe "$MODALIAS"
+        $MODALIAS=.* 0:0 660 @mixos modprobe "$MODALIAS"
       '';
 
       init = {
-        # TODO(jared): find a way to remove this script
-        pre-mixos-startup = {
-          action = "sysinit";
-          process = pkgs.writeScript "pre-mixos-startup" ''
-            #!/bin/sh
-            ${optionalString (config.boot.kernelModules != [ ]) ''
-              modprobe -a ${toString config.boot.kernelModules}
-            ''}
-            mdev -f -s
-          '';
-        };
-
         mixos-startup = {
           tty = "console"; # Used so that state init output can be viewed
           action = "sysinit";
-          deps = [ "pre-mixos-startup" ];
           process = toString [
             (getExe pkgs.mixos)
             "sysinit"
@@ -450,8 +447,9 @@ in
                     "CGROUPS"
                     "CONFIGFS_FS"
                     "DEBUG_FS_ALLOW_ALL"
-                    "UNIX" # implies CONFIG_NET
+                    "MODULES"
                     "SHMEM"
+                    "UNIX" # implies CONFIG_NET
                     "UNIX98_PTYS"
                   ]
                 );
@@ -532,7 +530,6 @@ in
     {
       boot.requiredKernelConfig = [
         "BLK_DEV_LOOP"
-        "DEVTMPFS_MOUNT"
         "EROFS_FS"
         "EROFS_FS_ZIP_LZMA"
         "FUTEX"
@@ -542,6 +539,10 @@ in
       ]
       ++ optionals (config.boot.firmware != [ ]) [
         "FW_LOADER_COMPRESS_XZ"
+      ]
+      ++ optionals (config.boot.kernel.config.isYes "MODULE_COMPRESS") [
+        # This allows us to call finit_module() with the MODULE_INIT_COMPRESSED_FILE flag
+        "MODULE_DECOMPRESS"
       ];
     }
     {
@@ -559,7 +560,13 @@ in
 
           # kernel modules
           ${optionalString (config.boot.kernel ? modules) ''
-            ln -sf ${getOutput "modules" config.boot.kernel}/lib/modules $out/lib/modules
+            cp --recursive --no-preserve=mode ${getOutput "modules" config.boot.kernel}/lib/modules $out/lib/modules
+
+            # Remove kmod's modules* files in favor of the native busybox
+            # depmod. In theory, the depmod output format could change, leading
+            # to incompatibilities.
+            rm $out/lib/modules/${config.boot.kernel.modDirVersion}/modules*
+            ${pkgs.buildPackages.busybox}/bin/depmod -b $out ${config.boot.kernel.modDirVersion}
           ''}
 
           # /bin (and /sbin)
