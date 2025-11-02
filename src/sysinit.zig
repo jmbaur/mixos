@@ -89,7 +89,7 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
 }
 
 fn parseStringMountOptions(options: []const []const u8, data_writer: *std.Io.Writer) !u32 {
-    var flags: u32 = 0;
+    var flags: u32 = MS.SILENT;
 
     for (options) |option| {
         if (std.mem.eql(u8, option, "ro")) {
@@ -108,6 +108,8 @@ fn parseStringMountOptions(options: []const []const u8, data_writer: *std.Io.Wri
             flags |= MS.NOATIME;
         } else if (std.mem.eql(u8, option, "bind")) {
             flags |= MS.BIND;
+        } else if (std.mem.eql(u8, option, "rbind")) {
+            flags |= MS.BIND | MS.REC;
         } else if (std.mem.eql(u8, option, "nodiratime")) {
             flags |= MS.NODIRATIME;
         } else if (std.mem.eql(u8, option, "sync")) {
@@ -122,14 +124,24 @@ fn parseStringMountOptions(options: []const []const u8, data_writer: *std.Io.Wri
             flags |= MS.MANDLOCK;
         } else if (std.mem.eql(u8, option, "private")) {
             flags |= MS.PRIVATE;
+        } else if (std.mem.eql(u8, option, "rprivate")) {
+            flags |= MS.PRIVATE | MS.REC;
         } else if (std.mem.eql(u8, option, "slave")) {
             flags |= MS.SLAVE;
+        } else if (std.mem.eql(u8, option, "rslave")) {
+            flags |= MS.SLAVE | MS.REC;
         } else if (std.mem.eql(u8, option, "move")) {
             flags |= MS.MOVE;
         } else if (std.mem.eql(u8, option, "shared")) {
             flags |= MS.SHARED;
+        } else if (std.mem.eql(u8, option, "rshared")) {
+            flags |= MS.SHARED | MS.REC;
         } else if (std.mem.eql(u8, option, "unbindable")) {
             flags |= MS.UNBINDABLE;
+        } else if (std.mem.eql(u8, option, "runbindable")) {
+            flags |= MS.UNBINDABLE | MS.REC;
+        } else if (std.mem.eql(u8, option, "defaults")) {
+            // dropped
         } else {
             if (data_writer.end > 0) {
                 try data_writer.writeByte(',');
@@ -138,13 +150,6 @@ fn parseStringMountOptions(options: []const []const u8, data_writer: *std.Io.Wri
             try data_writer.flush();
         }
     }
-
-    // TODO(jared): unhandled:
-    // REC
-    // SILENT
-    // POSIXACL
-    // KERNMOUNT
-    // I_VERSION
 
     return flags;
 }
@@ -156,15 +161,15 @@ test "parseStringMountOptions" {
     {
         const flags = parseStringMountOptions(&.{ "noatime", "compress=zstd" }, &data_writer.writer) catch unreachable;
         try std.testing.expectEqualStrings("compress=zstd", data_writer.written());
-        try std.testing.expectEqual(MS.NOATIME, flags);
+        try std.testing.expectEqual(MS.SILENT | MS.NOATIME, flags);
     }
 
     data_writer.clearRetainingCapacity();
 
     {
         const flags = parseStringMountOptions(&.{ "ro", "noatime", "compress=zstd", "defaults" }, &data_writer.writer) catch unreachable;
-        try std.testing.expectEqualStrings("compress=zstd,defaults", data_writer.written());
-        try std.testing.expectEqual(MS.NOATIME | MS.RDONLY, flags);
+        try std.testing.expectEqualStrings("compress=zstd", data_writer.written());
+        try std.testing.expectEqual(MS.SILENT | MS.NOATIME | MS.RDONLY, flags);
     }
 }
 
