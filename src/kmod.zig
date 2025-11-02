@@ -36,7 +36,7 @@ const MODULES_DEP = "modules.dep";
 const MODULES_ALIAS = "modules.alias";
 
 const ModuleIndex = std.StringArrayHashMap(usize);
-const ParamIndex = std.StringArrayHashMap([:0]const u8);
+const ParamIndex = std.BufMap;
 
 fn buildParamIndex(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ParamIndex {
     var params: ParamIndex = .init(allocator);
@@ -56,7 +56,7 @@ fn buildParamIndex(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ParamI
 
         const first_param = words.next() orelse continue;
         var module_params: std.Io.Writer.Allocating = .init(allocator);
-        errdefer module_params.deinit();
+        defer module_params.deinit();
 
         try module_params.writer.writeAll(first_param);
         try module_params.writer.writeByte(' ');
@@ -66,7 +66,7 @@ fn buildParamIndex(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ParamI
         }
         module_params.writer.undo(1);
 
-        try params.put(try allocator.dupe(u8, module_name), try module_params.toOwnedSliceSentinel(0));
+        try params.put(module_name, module_params.written());
     }
 
     return params;
@@ -81,24 +81,14 @@ test "buildParamIndex" {
         \\options nvme-tcp wq_unbound=Y
     ;
 
-    {
-        var reader: std.Io.Reader = .fixed(modules_conf);
-        var index = try buildParamIndex(std.testing.allocator, &reader);
-        defer {
-            for (index.keys()) |key| {
-                std.testing.allocator.free(key);
-            }
-            for (index.values()) |value| {
-                std.testing.allocator.free(value);
-            }
-            index.deinit();
-        }
+    var reader: std.Io.Reader = .fixed(modules_conf);
+    var index = try buildParamIndex(std.testing.allocator, &reader);
+    defer index.deinit();
 
-        try std.testing.expectEqual(2, index.count());
-        try std.testing.expectEqual(null, index.get("asdf"));
-        try std.testing.expectEqualStrings("bar", index.get("foo") orelse unreachable);
-        try std.testing.expectEqualStrings("wq_unbound=Y", index.get("nvme-tcp") orelse unreachable);
-    }
+    try std.testing.expectEqual(2, index.count());
+    try std.testing.expectEqual(null, index.get("asdf"));
+    try std.testing.expectEqualStrings("bar", index.get("foo") orelse unreachable);
+    try std.testing.expectEqualStrings("wq_unbound=Y", index.get("nvme-tcp") orelse unreachable);
 }
 
 fn buildModuleIndex(allocator: std.mem.Allocator, modules_dep: []const u8) !ModuleIndex {
@@ -485,12 +475,6 @@ pub fn deinit(self: *Kmod) void {
     self.module_index.deinit();
     self.allocator.free(self.modules_dep);
     self.allocator.free(self.aliases);
-    for (self.params.values()) |value| {
-        self.allocator.free(value);
-    }
-    for (self.params.keys()) |key| {
-        self.allocator.free(key);
-    }
     self.params.deinit();
 }
 
@@ -527,7 +511,7 @@ fn finit_module(
 pub fn insmod(
     self: *Kmod,
     module_filepath: []const u8,
-    override_params: ?[:0]const u8,
+    override_params: ?[]const u8,
 ) !void {
     const module_basename = std.fs.path.basename(module_filepath);
     const module_stem = std.fs.path.stem(module_basename);
@@ -550,12 +534,17 @@ pub fn insmod(
         flags |= c.MODULE_INIT_COMPRESSED_FILE;
     }
 
+    var params_buf = [_]u8{0} ** std.fs.max_name_bytes;
+    var fpa = std.heap.FixedBufferAllocator.init(&params_buf);
+    const allocator = fpa.allocator();
+
     const params = b: {
         if (override_params) |params| {
-            break :b params;
+            break :b try allocator.dupeZ(u8, params);
         } else if (self.params.get(module_display)) |params| {
-            break :b params;
+            break :b try allocator.dupeZ(u8, params);
         } else {
+            // finit_module() accepts an empty string for no params
             break :b "";
         }
     };
@@ -573,7 +562,11 @@ pub fn insmod(
 /// initialized with those params, otherwise params from /etc/modules.conf are
 /// used. This allows for customizing module parameters for all modules, not
 /// just the top-level module being loaded, but all transitive modules as well.
-pub fn modprobe(self: *Kmod, module_query: []const u8, override_params: ?[]const u8) !void {
+pub fn modprobe(
+    self: *Kmod,
+    module_query: []const u8,
+    override_params: ?[]const u8,
+) !void {
     var offsets = try findModuleOffsets(
         self.allocator,
         &self.module_index,
@@ -611,10 +604,7 @@ pub fn modprobe(self: *Kmod, module_query: []const u8, override_params: ?[]const
         }
 
         if (override_params) |params| {
-            const paramsZ = try self.allocator.dupeZ(u8, params);
-            defer self.allocator.free(paramsZ);
-
-            try self.insmod(module_filepath, paramsZ);
+            try self.insmod(module_filepath, params);
         } else {
             try self.insmod(module_filepath, null);
         }
