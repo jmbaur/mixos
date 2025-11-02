@@ -88,60 +88,40 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
     fs.mount("tmpfs", "/tmp", "tmpfs", MS.NOSUID | MS.NODEV, 0) catch {};
 }
 
+const mount_options = std.StaticStringMap(u32).initComptime(.{
+    .{ "ro", MS.RDONLY },
+    .{ "relatime", MS.RELATIME },
+    .{ "nosuid", MS.NOSUID },
+    .{ "nodev", MS.NODEV },
+    .{ "noexec", MS.NOEXEC },
+    .{ "remount", MS.REMOUNT },
+    .{ "noatime", MS.NOATIME },
+    .{ "bind", MS.BIND },
+    .{ "rbind", MS.BIND | MS.REC },
+    .{ "nodiratime", MS.NODIRATIME },
+    .{ "sync", MS.SYNCHRONOUS },
+    .{ "dirsync", MS.DIRSYNC },
+    .{ "lazytime", MS.LAZYTIME },
+    .{ "strictatime", MS.STRICTATIME },
+    .{ "mand", MS.MANDLOCK },
+    .{ "private", MS.PRIVATE },
+    .{ "rprivate", MS.PRIVATE | MS.REC },
+    .{ "slave", MS.SLAVE },
+    .{ "rslave", MS.SLAVE | MS.REC },
+    .{ "move", MS.MOVE },
+    .{ "shared", MS.SHARED },
+    .{ "rshared", MS.SHARED | MS.REC },
+    .{ "unbindable", MS.UNBINDABLE },
+    .{ "runbindable", MS.UNBINDABLE | MS.REC },
+    .{ "defaults", 0 },
+});
+
 fn parseStringMountOptions(options: []const []const u8, data_writer: *std.Io.Writer) !u32 {
     var flags: u32 = MS.SILENT;
 
     for (options) |option| {
-        if (std.mem.eql(u8, option, "ro")) {
-            flags |= MS.RDONLY;
-        } else if (std.mem.eql(u8, option, "relatime")) {
-            flags |= MS.RELATIME;
-        } else if (std.mem.eql(u8, option, "nosuid")) {
-            flags |= MS.NOSUID;
-        } else if (std.mem.eql(u8, option, "nodev")) {
-            flags |= MS.NODEV;
-        } else if (std.mem.eql(u8, option, "noexec")) {
-            flags |= MS.NOEXEC;
-        } else if (std.mem.eql(u8, option, "remount")) {
-            flags |= MS.REMOUNT;
-        } else if (std.mem.eql(u8, option, "noatime")) {
-            flags |= MS.NOATIME;
-        } else if (std.mem.eql(u8, option, "bind")) {
-            flags |= MS.BIND;
-        } else if (std.mem.eql(u8, option, "rbind")) {
-            flags |= MS.BIND | MS.REC;
-        } else if (std.mem.eql(u8, option, "nodiratime")) {
-            flags |= MS.NODIRATIME;
-        } else if (std.mem.eql(u8, option, "sync")) {
-            flags |= MS.SYNCHRONOUS;
-        } else if (std.mem.eql(u8, option, "dirsync")) {
-            flags |= MS.DIRSYNC;
-        } else if (std.mem.eql(u8, option, "lazytime")) {
-            flags |= MS.LAZYTIME;
-        } else if (std.mem.eql(u8, option, "strictatime")) {
-            flags |= MS.STRICTATIME;
-        } else if (std.mem.eql(u8, option, "mand")) {
-            flags |= MS.MANDLOCK;
-        } else if (std.mem.eql(u8, option, "private")) {
-            flags |= MS.PRIVATE;
-        } else if (std.mem.eql(u8, option, "rprivate")) {
-            flags |= MS.PRIVATE | MS.REC;
-        } else if (std.mem.eql(u8, option, "slave")) {
-            flags |= MS.SLAVE;
-        } else if (std.mem.eql(u8, option, "rslave")) {
-            flags |= MS.SLAVE | MS.REC;
-        } else if (std.mem.eql(u8, option, "move")) {
-            flags |= MS.MOVE;
-        } else if (std.mem.eql(u8, option, "shared")) {
-            flags |= MS.SHARED;
-        } else if (std.mem.eql(u8, option, "rshared")) {
-            flags |= MS.SHARED | MS.REC;
-        } else if (std.mem.eql(u8, option, "unbindable")) {
-            flags |= MS.UNBINDABLE;
-        } else if (std.mem.eql(u8, option, "runbindable")) {
-            flags |= MS.UNBINDABLE | MS.REC;
-        } else if (std.mem.eql(u8, option, "defaults")) {
-            // dropped
+        if (mount_options.get(option)) |bitmask| {
+            flags |= bitmask;
         } else {
             if (data_writer.end > 0) {
                 try data_writer.writeByte(',');
