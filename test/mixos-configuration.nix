@@ -56,4 +56,19 @@ in
   mdev.rules = ''
     null 0:0 666
   '';
+
+  users.root = {
+    uid = 0;
+    gid = 0;
+    description = "System administrator";
+    home = "/root";
+    shell = "/bin/sh";
+  };
+
+  groups.root.id = 0;
+
+  users.foo = {
+    uid = 1;
+    gid = 0;
+  };
 }

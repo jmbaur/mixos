@@ -11,7 +11,10 @@ let
   inherit (lib)
     any
     attrNames
+    attrValues
     concatLines
+    concatMapStringsSep
+    concatStringsSep
     elem
     filter
     filterAttrs
@@ -38,9 +41,11 @@ let
     optionalAttrs
     optionalString
     optionals
+    subtractLists
     systems
     textClosureMap
     types
+    unique
     ;
 
   bin = pkgs.buildEnv {
@@ -229,6 +234,61 @@ in
       default = { };
     };
 
+    groups = mkOption {
+      type = types.attrsOf (
+        types.submodule (
+          { name, ... }:
+          {
+            options = {
+              name = mkOption {
+                type = types.str;
+                default = name;
+              };
+              id = mkOption {
+                type = types.ints.u16;
+              };
+            };
+          }
+        )
+      );
+      default = { };
+    };
+
+    users = mkOption {
+      type = types.attrsOf (
+        types.submodule (
+          { name, ... }:
+          {
+            options = {
+              name = mkOption {
+                type = types.str;
+                default = name;
+              };
+              uid = mkOption { type = types.ints.u16; };
+              gid = mkOption { type = types.ints.u16; };
+              description = mkOption {
+                type = types.str;
+                default = "";
+              };
+              home = mkOption {
+                type = types.str;
+                default = "/var/empty";
+              };
+              shell = mkOption {
+                type = types.path;
+                default = "/bin/nologin";
+              };
+              groups = mkOption {
+                type = types.listOf types.str;
+                default = [ ];
+              };
+            };
+          }
+        )
+      );
+      default = { };
+    };
+
     init = mkOption {
       default = { };
       type = types.attrsOf (
@@ -403,6 +463,19 @@ in
           assertion = config.boot.kernelModules != [ ] -> config.boot.kernel.config.isYes "MODULES";
           message = "Cannot declare kernel modules be loaded at runtime without having CONFIG_MODULES=y set in the kernel config";
         }
+        (
+          let
+            userGids = unique (mapAttrsToList (_: { gid, ... }: gid) config.users);
+            groupIds = unique (mapAttrsToList (_: { id, ... }: id) config.groups);
+            diff = subtractLists groupIds userGids;
+          in
+          {
+            assertion = diff == [ ];
+            message = "Some users have GIDs that do not correspond to any declared group. Missing groups with IDs: ${
+              concatMapStringsSep ", " toString diff
+            }";
+          }
+        )
       ];
     }
     {
@@ -422,6 +495,35 @@ in
               127.0.0.1 localhost
               ::1 localhost
             ''
+          )
+        );
+        "passwd".source = pkgs.writeText "passwd" (
+          concatLines (
+            map (
+              {
+                name,
+                uid,
+                gid,
+                description,
+                home,
+                shell,
+                ...
+              }:
+              "${name}:x:${toString uid}:${toString gid}:${description}:${home}:${shell}"
+            ) (attrValues config.users)
+          )
+        );
+        "group".source = pkgs.writeText "group" (
+          concatLines (
+            map (
+              { name, id, ... }:
+              let
+                members = mapAttrsToList (_: { name, ... }: name) (
+                  filterAttrs (_: { groups, ... }: elem name groups) config.users
+                );
+              in
+              "${name}:x:${toString id}:${concatStringsSep "," members}"
+            ) (attrValues config.groups)
           )
         );
       };
