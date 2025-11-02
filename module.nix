@@ -15,10 +15,13 @@ let
     concatLines
     concatMapStringsSep
     concatStringsSep
+    const
     elem
     filter
     filterAttrs
-    flatten
+    flip
+    genAttrs
+    getAttr
     getBin
     getExe
     getOutput
@@ -91,7 +94,7 @@ let
             textClosureMap id inittabTextAttrs (attrNames inittabTextAttrs)
           )
           (
-            groupBy (x: x.group) (
+            groupBy (getAttr "group") (
               mapAttrsToList (
                 name:
                 {
@@ -109,11 +112,13 @@ let
                     text = "${tty}::${action}:${process}"; # busybox /init does not implement runlevels
                   };
                 }
-              ) (filterAttrs (_: { enable, ... }: enable) config.init)
+              ) (filterAttrs (const (getAttr "enable")) config.init)
             )
           );
     in
-    concatLines (flatten (map (action: groups.${action} or [ ]) possibleActions));
+    builtins.foldl' (
+      acc: action: if hasAttr action groups then acc + groups.${action} + "\n" else acc
+    ) "" possibleActions;
 in
 {
   options = {
