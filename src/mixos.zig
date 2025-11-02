@@ -1,8 +1,11 @@
 const std = @import("std");
-const sysinit = @import("./sysinit.zig");
 const insmod = @import("./insmod.zig");
+const kmsg = @import("./kmsg.zig");
 const modprobe = @import("./modprobe.zig");
+const sysinit = @import("./sysinit.zig");
 const test_backdoor = @import("./test-backdoor.zig");
+
+pub const std_options = kmsg.std_options;
 
 pub fn main() !void {
     var args = std.process.args();

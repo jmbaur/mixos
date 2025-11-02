@@ -517,7 +517,7 @@ pub fn insmod(
     const module_stem = std.fs.path.stem(module_basename);
     const module_display = std.fs.path.stem(module_stem);
 
-    log.debug("loading module {s} from {s}", .{ module_stem, module_filepath });
+    log.debug("loading module {s} from /lib/modules/$(uname -r)/{s}", .{ module_display, module_filepath });
 
     var module_file = try self.modules_dir.openFile(module_filepath, .{});
     defer module_file.close();

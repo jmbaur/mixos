@@ -1,7 +1,7 @@
 const std = @import("std");
 const system = std.posix.system;
-const kmsg = @import("./kmsg.zig");
 const fs = @import("./fs.zig");
+const kmsg = @import("./kmsg.zig");
 
 const log = std.log.scoped(.mixos);
 
@@ -43,8 +43,8 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
 
     // We must wait until now to setup the /dev/kmsg logger, since /dev is not
     // mounted until right before this.
-    var kmsg_logger = kmsg.init();
-    defer kmsg_logger.deinit();
+    kmsg.init();
+    defer kmsg.deinit();
 
     const cmdline_file = try std.fs.cwd().openFile("/proc/cmdline", .{});
     defer cmdline_file.close();

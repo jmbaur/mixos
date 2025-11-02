@@ -7,8 +7,6 @@ const MS = std.os.linux.MS;
 
 const log = std.log.scoped(.mixos);
 
-pub const std_options = kmsg.std_options;
-
 const KernelConfig = struct {
     CGROUPS: bool,
     CONFIGFS_FS: bool,
@@ -418,8 +416,8 @@ pub fn mixosMain(args: *std.process.ArgIterator) !void {
     // We log to /dev/kmsg in sysinit since at this point in time syslogd is
     // not yet started. The klogd process will pick up our userspace logs sent
     // to the kernel and forward them to syslog.
-    var kmsg_logger = kmsg.init();
-    defer kmsg_logger.deinit();
+    kmsg.init();
+    defer kmsg.deinit();
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();

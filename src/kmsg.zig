@@ -16,7 +16,7 @@ var kmsg: ?std.fs.File = null;
 var log_buf: [PRINTKRB_RECORD_MAX]u8 = undefined;
 var stream = std.io.fixedBufferStream(&log_buf);
 
-pub fn init() @This() {
+pub fn init() void {
     // disable kmsg rate limit
     if (std.fs.cwd().openFile(
         "/proc/sys/kernel/printk_devkmsg",
@@ -29,13 +29,9 @@ pub fn init() @This() {
     if (std.fs.cwd().openFile("/dev/kmsg", .{ .mode = .write_only })) |kmsg_file| {
         kmsg = kmsg_file;
     } else |_| {}
-
-    return .{};
 }
 
-pub fn deinit(self: *@This()) void {
-    _ = self;
-
+pub fn deinit() void {
     if (kmsg) |file| {
         file.close();
     }
@@ -72,7 +68,14 @@ pub fn logFn(
         break :b fixed_writer.buffer;
     };
 
-    const file = kmsg orelse return;
+    const file = kmsg orelse {
+        return std.log.defaultLog(
+            std.log.default_level,
+            scope,
+            format,
+            args,
+        );
+    };
 
     mutex.lock();
     defer mutex.unlock();
@@ -91,6 +94,9 @@ pub fn logFn(
 
 pub const std_options: std.Options = .{
     // We write to /dev/kmsg, so we let the kernel do the log filtering for us.
+    // In the case where the kmsg file is not opened, we fallback to
+    // std.log.defaultLog() using a filter that is more appropriate based on
+    // the executable's build mode.
     .log_level = .debug,
     .logFn = logFn,
 };
