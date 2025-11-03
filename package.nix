@@ -20,6 +20,7 @@ stdenvNoCC.mkDerivation {
   };
 
   __structuredAttrs = true;
+  strictDeps = true;
 
   zigBuildFlags = [
     "--color off"
@@ -34,10 +35,8 @@ stdenvNoCC.mkDerivation {
   dontStrip = true;
   dontPatchELF = true;
 
-  configurePhase = ''
-    runHook preConfigure
-    export ZIG_GLOBAL_CACHE_DIR=$TEMPDIR
-    runHook postConfigure
+  preHook = ''
+    export ZIG_GLOBAL_CACHE_DIR=$TMPDIR
   '';
 
   buildPhase = ''
@@ -54,10 +53,11 @@ stdenvNoCC.mkDerivation {
 
   installPhase = ''
     runHook preInstall
-    zig build install -j$NIX_BUILD_CORES --prefix $out ''${zigBuildFlags[@]}
+    zig build install -j$NIX_BUILD_CORES --prefix "$out" ''${zigBuildFlags[@]}
     for symlink in modprobe insmod; do
-      ln -sf $out/bin/mixos $out/bin/$symlink
+      ln -sf "$out/bin/mixos" "$out/bin/$symlink"
     done
+    unset -v symlink
     runHook postInstall
   '';
 
