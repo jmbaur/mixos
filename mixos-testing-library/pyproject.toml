@@ -2,3 +2,6 @@
 name = "mixos-testing-library"
 version = "0.1.0"
 dependencies = ["schema>=0.7"]
+
+[build-system]
+requires = ["setuptools"]
