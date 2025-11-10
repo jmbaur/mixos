@@ -223,6 +223,15 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
             log.err("failed to create /var/empty: {}", .{err});
             break :b;
         };
+
+        // Symlink /var/run to /run, which is a common symlink that is expected
+        // to exist by many tools.
+        var dir = std.fs.cwd().openDir("/var", .{}) catch break :b;
+        defer dir.close();
+        dir.symLink("../run", "run", .{ .is_directory = true }) catch |err| {
+            log.err("failed to symlink /var/run to /run: {}", .{err});
+            break :b;
+        };
     }
 
     // Ensure /etc is writeable, needed by various programs.

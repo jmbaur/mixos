@@ -19,8 +19,6 @@ let
     elem
     filter
     filterAttrs
-    flip
-    genAttrs
     getAttr
     getBin
     getExe
@@ -677,14 +675,14 @@ in
           ''}
 
           # /bin (and /sbin)
-          ln -sf ${bin}/bin $out/bin && ln -sf $out/bin $out/sbin
+          ln -sf ${bin}/bin $out/bin
+          ln -sf $out/bin $out/sbin
 
-          # /tmp is setup as a tmpfs on bootup, symlink it to /run and /var/run
-          # since some programs want to write there, but all should be
-          # ephemeral. We spawn a subshell so that we can have our symlink(s)
-          # be relative to the nix output, not the full path including the nix
-          # output path.
-          (pushd $out && ln -sf ./tmp ./run && ln -sf ./tmp ./var/run)
+          # /tmp is setup as a tmpfs on bootup, symlink it to /run since some
+          # programs want to write there, but all should be ephemeral. We spawn
+          # a subshell so that we can have our symlink(s) be relative to the
+          # nix output, not the full path including the nix output path.
+          ln -sfr $out/tmp $out/run
 
           # /etc
           ${concatLines (
