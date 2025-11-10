@@ -17,6 +17,7 @@ let
     concatStringsSep
     const
     elem
+    fileContents
     filter
     filterAttrs
     getAttr
@@ -48,6 +49,8 @@ let
     types
     unique
     ;
+
+  osReleaseFormat = pkgs.formats.keyValue { };
 
   bin = pkgs.buildEnv {
     name = "mixos-bin";
@@ -425,6 +428,26 @@ in
     };
 
     mixos = {
+      osRelease = mkOption {
+        type = types.submodule {
+          freeformType = osReleaseFormat.type;
+          options = {
+            ID = mkOption {
+              type = types.str;
+              default = "mixos";
+            };
+            VERSION_ID = mkOption {
+              type = types.str;
+              default = fileContents ./.version;
+            };
+          };
+        };
+        default = { };
+        description = ''
+          /etc/os-release contents.
+        '';
+      };
+
       testing = {
         enable = mkEnableOption "the mixos test backdoor service";
         port = mkOption {
@@ -500,6 +523,7 @@ in
             ''
           )
         );
+        "os-release".source = osReleaseFormat.generate "os-release" config.mixos.osRelease;
         "passwd".source = pkgs.writeText "passwd" (
           concatLines (
             map (

@@ -6,7 +6,10 @@ in
 {
   bin = [ pkgs.strace ];
 
-  mixos.testing.enable = true;
+  mixos = {
+    testing.enable = true;
+    osRelease.EXPERIMENT = "test";
+  };
 
   boot.kernel = pkgs.linuxKernel.manualConfig {
     inherit (pkgs.linux_6_17) src version;
