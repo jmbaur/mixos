@@ -5,3 +5,6 @@ dependencies = ["schema>=0.7"]
 
 [build-system]
 requires = ["setuptools"]
+
+[project.scripts]
+mixos = "mixos:__main__"
