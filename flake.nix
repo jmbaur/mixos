@@ -24,6 +24,8 @@
         ];
       };
 
+      hydraJobs.mixos.x86_64-linux = inputs.self.legacyPackages.x86_64-linux.mixos;
+
       legacyPackages = genAttrs [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ] (
         system:
         import inputs.nixpkgs {
