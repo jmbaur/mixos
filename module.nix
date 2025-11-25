@@ -689,7 +689,8 @@ in
 
           # kernel modules
           ${optionalString (config.boot.kernel ? modules) ''
-            cp --recursive --no-preserve=mode ${getOutput "modules" config.boot.kernel}/lib/modules $out/lib/modules
+            cp -r --preserve=timestamps --reflink=auto -- ${getOutput "modules" config.boot.kernel}/lib/modules $out/lib/modules
+            chmod -R u+w $out/lib/modules
 
             # Remove kmod's modules* files in favor of the native busybox
             # depmod. In theory, the depmod output format could change, leading
