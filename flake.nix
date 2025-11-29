@@ -7,6 +7,8 @@
     inputs:
     let
       inherit (inputs.nixpkgs.lib)
+        concatMapStringsSep
+        escapeShellArg
         evalModules
         genAttrs
         getExe
@@ -79,23 +81,17 @@
               "2G"
               "-nographic"
               "-device"
-              "virtio-net-pci,netdev=netdev0"
+              "e1000,netdev=net0"
               "-netdev"
-              "stream,id=netdev0,server=on,addr.type=unix,addr.path=/tmp/qemu-net.sock,wait=off"
-              # "-device"
-              # "\"e1000,netdev=net0\""
-              # "-netdev"
-              # "\"user,id=net0,hostfwd=tcp::8000-:8000\""
+              "user,id=net0,hostfwd=tcp::8000-:8000"
               "-kernel"
               "${mixosConfig.config.system.build.all}/kernel"
               "-initrd"
               "test.initrd"
               "-append"
-              "\"${
-                toString (
-                  [ "debug" ] ++ optionals mixosPkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ]
-                )
-              }\""
+              "${toString (
+                [ "debug" ] ++ optionals mixosPkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ]
+              )}"
             ];
         in
         {
@@ -125,7 +121,7 @@
                     qemu_opts+=("-enable-kvm")
                   fi
 
-                  qemu_opts+=(${toString qemuOpts})
+                  qemu_opts+=(${concatMapStringsSep " " escapeShellArg qemuOpts})
                   qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} "''${qemu_opts[@]}"
                 '';
               }
