@@ -173,29 +173,6 @@ in
         description = ''
           A kernel packaged from the nixpkgs Linux kernel build recipe.
         '';
-        # TODO(jared): Remove once https://github.com/NixOS/nixpkgs/pull/423933 is in a stable release.
-        #
-        # This allows for the nix output containing the kernel image to be
-        # separated from the nix output containing the kernel modules, meaning we
-        # don't have to ship our filesystem image with an unecessary kernel
-        # image.
-        apply =
-          kernel:
-          kernel.overrideAttrs (
-            old:
-            optionalAttrs (!(elem "modules" old.outputs or [ ]) && old.passthru.config.isYes "MODULES") {
-              outputs = old.outputs ++ [ "modules" ];
-              preConfigure = ''
-                unset modules
-              '';
-              postInstall = ''
-                ${old.postInstall or ""}
-                modules=${placeholder "modules"}
-                mkdir -p $modules
-                mv $out/lib $modules
-              '';
-            }
-          );
       };
 
       firmware = mkOption {
