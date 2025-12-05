@@ -96,27 +96,3 @@ class Machine:
         response = self.recv_message()
         valid = run_command_schema.validate(response["run_command"])
         return RunCommandResult(valid)
-
-
-class VirtualMachine(Machine):
-    def __init__(self, kernel: str, initrd: str, append: str):
-        super().__init__(("localhost", 8000))
-        self.process = subprocess.Popen(
-            f"qemu-system-x86_64 -enable-kvm -machine q35 -m 2G -nographic -device \"e1000,netdev=net0\" -netdev \"user,id=net0,hostfwd=tcp::8000-:8000\" -kernel {kernel} -initrd {initrd} -append \"{append}\"",
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            shell=True,
-            # cwd=state_dir,
-            # env=self.build_environment(state_dir, shared_dir),
-        )
-
-        def process_serial_output() -> None:
-            assert self.process
-            assert self.process.stdout
-            for _line in self.process.stdout:
-                # Ignore undecodable bytes that may occur in boot menus
-                line = _line.decode(errors="ignore").replace("\r", "").rstrip()
-                print(line)
-
-        self.serial_thread = threading.Thread(target=process_serial_output)
-        self.serial_thread.start()
