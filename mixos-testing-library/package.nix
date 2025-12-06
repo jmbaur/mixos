@@ -8,27 +8,33 @@
 }:
 
 let
+  pname = pyproject.project.name;
+  inherit (pyproject.project) version;
   pyproject = lib.importTOML ./pyproject.toml;
+  build-system = [ setuptools ];
+  dependencies = [ schema ];
 in
 if __editable then
   mkPythonEditablePackage {
-    pname = pyproject.project.name;
-    inherit (pyproject.project) version;
+    inherit
+      pname
+      version
+      build-system
+      dependencies
+      ;
 
     root = "$REPO_ROOT/mixos-testing-library";
-
-    build-system = [ setuptools ];
-    dependencies = [ schema ];
   }
 else
   buildPythonPackage {
-    pname = pyproject.project.name;
-    inherit (pyproject.project) version;
+    inherit
+      pname
+      version
+      build-system
+      dependencies
+      ;
 
     pyproject = true;
-
-    build-system = [ setuptools ];
-    dependencies = [ schema ];
 
     src = lib.fileset.toSource {
       root = ./.;

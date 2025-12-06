@@ -133,9 +133,10 @@
       devShells = mapAttrs (_: pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [
-            (python3.withPackages (p: [ p.mixos-testing-library ]))
+            (python3.withPackages (p: [ (p.mixos-testing-library.override { __editable = true; }) ]))
             zig_0_15
           ];
+          shellHook = "export REPO_ROOT=$(git rev-parse --show-toplevel)";
         };
       }) inputs.self.legacyPackages;
 
