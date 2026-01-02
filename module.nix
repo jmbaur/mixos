@@ -8,28 +8,34 @@
 
 let
   inherit (lib.asserts) checkAssertWarn;
-  inherit (lib)
+
+  inherit (builtins)
     any
     attrNames
     attrValues
-    concatLines
-    concatMapStringsSep
     concatStringsSep
-    const
     elem
-    fileContents
     filter
-    filterAttrs
     getAttr
-    getBin
-    getExe
-    getOutput
     groupBy
     hasAttr
-    id
     isFunction
     listToAttrs
     mapAttrs
+    ;
+
+  inherit (lib)
+    concatLines
+    concatMapStringsSep
+    const
+    fileContents
+    filterAttrs
+    getBin
+    getExe
+    getExe'
+    getOutput
+    id
+    literalExpression
     mapAttrsToList
     mergeOneOption
     mkBefore
@@ -40,7 +46,6 @@ let
     mkOption
     mkOptionType
     nameValuePair
-    optionalAttrs
     optionalString
     optionals
     subtractLists
@@ -52,24 +57,9 @@ let
 
   osReleaseFormat = pkgs.formats.keyValue { };
 
-  bin = pkgs.buildEnv {
-    name = "mixos-bin";
-    paths = map getBin (
-      config.bin
-      ++ [
-        pkgs.busybox
-        pkgs.mixos
-      ]
-    );
-    pathsToLink = [ "/bin" ];
-  };
+  kernelPackage = config.boot.kernelPackages.kernel;
 
-  firmware = pkgs.buildEnv {
-    name = "mixos-firmware";
-    paths = map pkgs.compressFirmwareXz config.boot.firmware;
-    pathsToLink = [ "/lib/firmware" ];
-    ignoreCollisions = true;
-  };
+  hasModules = kernelPackage.config.isYes "MODULES";
 
   possibleActions = [
     "sysinit"
@@ -168,10 +158,20 @@ in
         default = [ ];
       };
 
-      kernel = mkOption {
-        type = types.package;
+      kernelPackages = mkOption {
+        type = types.raw;
         description = ''
-          A kernel packaged from the nixpkgs Linux kernel build recipe.
+          A kernel package-set containing a kernel attribute and optionally one
+          or more kernel modules (à la pkgs.linuxPackagesFor ...).
+        '';
+      };
+
+      extraModulePackages = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        example = literalExpression "[ config.boot.kernelPackages.nvidia_x11 ]";
+        description = ''
+          A list of additional packages supplying kernel modules.
         '';
       };
 
@@ -444,7 +444,7 @@ in
         (
           let
             missing = filter (
-              kconfigOption: !config.boot.kernel.config.isYes kconfigOption
+              kconfigOption: !kernelPackage.config.isYes kconfigOption
             ) config.boot.requiredKernelConfig;
           in
           {
@@ -463,7 +463,8 @@ in
           }
         )
         {
-          assertion = config.boot.kernelModules != [ ] -> config.boot.kernel.config.isYes "MODULES";
+          assertion =
+            (config.boot.kernelModules != [ ] || config.boot.extraModulePackages != [ ]) -> hasModules;
           message = "Cannot declare kernel modules be loaded at runtime without having CONFIG_MODULES=y set in the kernel config";
         }
         (
@@ -492,7 +493,7 @@ in
       etc = {
         "inittab".source = pkgs.writeText "mixos-inittab" inittab;
         "mdev.conf".source = pkgs.writeText "mdev.conf" config.mdev.rules;
-        "hosts".source = mkIf (config.boot.kernel.config.isYes "NET") (
+        "hosts".source = mkIf (kernelPackage.config.isYes "NET") (
           mkDefault (
             pkgs.writeText "etc-hosts" ''
               127.0.0.1 localhost
@@ -549,7 +550,7 @@ in
               boot = {
                 inherit (config.boot) kernelModules;
                 kernel = listToAttrs (
-                  map (option: nameValuePair option (config.boot.kernel.config.isYes option)) [
+                  map (option: nameValuePair option (kernelPackage.config.isYes option)) [
                     "CGROUPS"
                     "CONFIGFS_FS"
                     "DEBUG_FS_ALLOW_ALL"
@@ -646,58 +647,71 @@ in
       ++ optionals (config.boot.firmware != [ ]) [
         "FW_LOADER_COMPRESS_XZ"
       ]
-      ++ optionals (config.boot.kernel.config.isYes "MODULE_COMPRESS") [
+      ++ optionals (kernelPackage.config.isYes "MODULE_COMPRESS") [
         # This allows us to call finit_module() with the MODULE_INIT_COMPRESSED_FILE flag
         "MODULE_DECOMPRESS"
+        "MODULE_COMPRESS_XZ"
       ];
     }
     {
       system.build.root = checkAssertWarn config.assertions config.warnings (
-        pkgs.runCommand "mixos-root" { } ''
-          # our root filesystem is read-only, so we must create all top-level
-          # directories for any future mountpoints
-          mkdir -p $out/{lib,etc,dev,proc,sys,var,tmp,state,passthru}
+        pkgs.buildEnv {
+          name = "mixos-root";
+          paths =
+            map getBin (
+              config.bin
+              ++ [
+                pkgs.busybox
+                pkgs.mixos
+              ]
+            )
+            ++ map pkgs.compressFirmwareXz config.boot.firmware
+            ++ optionals hasModules (
+              [ (getOutput "modules" kernelPackage) ] ++ config.boot.extraModulePackages
+            );
+          pathsToLink = [
+            "/bin"
+            "/etc"
+            "/lib/firmware"
+            "/lib/modules"
+          ];
+          ignoreCollisions = true;
+          postBuild = ''
+            # Our root filesystem is read-only, so we must create all top-level
+            # directories for any future mountpoints.
+            mkdir -p $out/{etc,dev,proc,sys,var,tmp,state,passthru}
 
-          # pid 1
-          ln -sf ${bin}/bin/init $out/init
+            # pid 1
+            ln -sf $out/bin/init $out/init
 
-          # kernel firmware
-          ln -sf ${firmware}/lib/firmware $out/lib/firmware
+            # /sbin -> /bin
+            ln -sf $out/bin $out/sbin
 
-          # kernel modules
-          ${optionalString (config.boot.kernel ? modules) ''
-            cp -r --preserve=timestamps --reflink=auto -- ${getOutput "modules" config.boot.kernel}/lib/modules $out/lib/modules
-            chmod -R u+w $out/lib/modules
+            # /tmp is setup as a tmpfs on bootup, symlink it to /run since some
+            # programs want to write there, but all should be ephemeral. We
+            # spawn a subshell so that we can have our symlink(s) be relative
+            # to the nix output, not the full path including the nix output
+            # path.
+            ln -sfr $out/tmp $out/run
 
-            # Remove kmod's modules* files in favor of the native busybox
-            # depmod. In theory, the depmod output format could change, leading
-            # to incompatibilities.
-            rm $out/lib/modules/${config.boot.kernel.modDirVersion}/modules*
-            ${pkgs.buildPackages.busybox}/bin/depmod -b $out ${config.boot.kernel.modDirVersion}
-          ''}
+            ${optionalString hasModules ''
+              find $out/lib/modules/${kernelPackage.modDirVersion}/ -name 'modules*' -not -name 'modules.builtin*' -not -name 'modules.order' -delete
+              ${getExe' pkgs.buildPackages.kmod "depmod"} -b $out -C $out/etc/depmod.d -a ${kernelPackage.modDirVersion}
+            ''}
 
-          # /bin (and /sbin)
-          ln -sf ${bin}/bin $out/bin
-          ln -sf $out/bin $out/sbin
-
-          # /tmp is setup as a tmpfs on bootup, symlink it to /run since some
-          # programs want to write there, but all should be ephemeral. We spawn
-          # a subshell so that we can have our symlink(s) be relative to the
-          # nix output, not the full path including the nix output path.
-          ln -sfr $out/tmp $out/run
-
-          # /etc
-          ${concatLines (
-            mapAttrsToList (
-              pathUnderEtc:
-              { source }:
-              ''
-                mkdir -p $(dirname $out/etc/${pathUnderEtc})
-                ln -sf ${source} $out/etc/${pathUnderEtc}
-              ''
-            ) config.etc
-          )}
-        ''
+            # /etc
+            ${concatLines (
+              mapAttrsToList (
+                pathUnderEtc:
+                { source }:
+                ''
+                  mkdir -p $(dirname $out/etc/${pathUnderEtc})
+                  ln -sf ${source} $out/etc/${pathUnderEtc}
+                ''
+              ) config.etc
+            )}
+          '';
+        }
       );
 
       system.build.rootfs = pkgs.callPackage (
@@ -710,6 +724,7 @@ in
           {
             __structuredAttrs = true;
             unsafeDiscardReferences.out = true;
+            enableParallelBuilding = true;
 
             exportReferencesGraph.closure = [ config.system.build.root ];
 
@@ -749,7 +764,7 @@ in
       system.build.all = pkgs.buildEnv {
         name = "mixos-all";
         paths = [
-          config.boot.kernel
+          kernelPackage
           config.system.build.initrd
         ];
         postBuild = ''
