@@ -3,8 +3,6 @@ from typing import TypedDict
 import json
 import logging
 import socket
-import subprocess
-import threading
 
 logger = logging.getLogger(__name__)
 
