@@ -6,13 +6,13 @@
   outputs =
     inputs:
     let
+      inherit (builtins) mapAttrs;
       inherit (inputs.nixpkgs.lib)
         concatMapStringsSep
         escapeShellArg
         evalModules
         genAttrs
         getExe
-        mapAttrs
         optionals
         ;
     in
