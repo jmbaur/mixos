@@ -1,4 +1,4 @@
-{ pkgs, ... }:
+{ config, pkgs, ... }:
 
 let
   configfile = ./${pkgs.stdenv.hostPlatform.linuxArch}.config;
@@ -11,12 +11,19 @@ in
     osRelease.EXPERIMENT = "test";
   };
 
-  boot.kernel = pkgs.linuxKernel.manualConfig {
-    inherit (pkgs.linux_6_17) src version;
-    inherit configfile;
-  };
+  boot.kernelPackages = pkgs.linuxKernel.packagesFor (
+    pkgs.linuxKernel.manualConfig {
+      inherit (pkgs.linux_6_18) src version;
+      inherit configfile;
+    }
+  );
 
-  boot.kernelModules = [ "nvme-tcp" ];
+  boot.extraModulePackages = [ config.boot.kernelPackages.jool ];
+
+  boot.kernelModules = [
+    "nvme-tcp"
+    "jool"
+  ];
 
   state = {
     enable = true;
@@ -52,7 +59,7 @@ in
     mixos-test
   '';
 
-  etc."modules.conf".source = pkgs.writeText "modules.conf" ''
+  etc."modprobe.d/mixos.conf".source = pkgs.writeText "modprobe-mixos.conf" ''
     options nvme-tcp wq_unbound=Y
   '';
 

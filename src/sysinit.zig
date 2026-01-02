@@ -373,6 +373,28 @@ fn setupNetworking(kernel: *const KernelConfig) !void {
     }
 }
 
+fn done(mode: enum { check, mark }) !void {
+    const done_filepath = "done";
+
+    var run_mixos_dir = std.fs.cwd().makeOpenPath("/run/mixos", .{}) catch |err| if (mode == .mark) {
+        return err;
+    } else {
+        return;
+    };
+    defer run_mixos_dir.close();
+
+    switch (mode) {
+        .check => {
+            run_mixos_dir.access(done_filepath, .{}) catch return;
+            return error.SysinitDone;
+        },
+        .mark => {
+            const done_file = try run_mixos_dir.createFile(done_filepath, .{ .truncate = true, .mode = 0o400 });
+            defer done_file.close();
+        },
+    }
+}
+
 fn setupModprobeAndLoadModules(
     allocator: std.mem.Allocator,
     kernel: *const KernelConfig,
@@ -382,14 +404,11 @@ fn setupModprobeAndLoadModules(
         return;
     }
 
-    var kmod = Kmod.init(allocator) catch |err| switch (err) {
-        error.NoModules => return,
-        else => return err,
-    };
+    var kmod = try Kmod.init(allocator);
     defer kmod.deinit();
 
     for (modules) |module| {
-        kmod.modprobe(module, null) catch |err| {
+        kmod.modprobe(module) catch |err| {
             log.err("failed to load module {s}: {}", .{ module, err });
         };
     }
@@ -412,6 +431,11 @@ pub fn mixosMain(args: *std.process.ArgIterator) !void {
     // to the kernel and forward them to syslog.
     kmsg.init();
     defer kmsg.deinit();
+
+    done(.check) catch {
+        log.err("sysinit already ran, skipping", .{});
+        return;
+    };
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
@@ -449,5 +473,9 @@ pub fn mixosMain(args: *std.process.ArgIterator) !void {
 
     setupNetworking(&sysinit_config.value.boot.kernel) catch |err| {
         log.err("failed to setup networking: {}", .{err});
+    };
+
+    done(.mark) catch |err| {
+        log.err("failed to mark sysinit as done: {}", .{err});
     };
 }

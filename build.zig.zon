@@ -2,7 +2,12 @@
     .name = .mixos,
     .version = "0.1.0",
     .fingerprint = 0x9025926ecf183446,
-    .minimum_zig_version = "0.15.0",
-    .dependencies = .{},
+    .minimum_zig_version = "0.15.1",
     .paths = .{ "build.zig", "build.zig.zon", "src" },
+    .dependencies = .{
+        .kmod = .{
+            .url = "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git/snapshot/kmod-34.2.tar.gz",
+            .hash = "N-V-__8AACXSEAC4vv9Dh65rS1ICs847KPjvNop6RIHJUDNN",
+        },
+    },
 }

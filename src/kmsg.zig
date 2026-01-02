@@ -91,12 +91,3 @@ pub fn logFn(
 
     stream.reset();
 }
-
-pub const std_options: std.Options = .{
-    // We write to /dev/kmsg, so we let the kernel do the log filtering for us.
-    // In the case where the kmsg file is not opened, we fallback to
-    // std.log.defaultLog() using a filter that is more appropriate based on
-    // the executable's build mode.
-    .log_level = .debug,
-    .logFn = logFn,
-};

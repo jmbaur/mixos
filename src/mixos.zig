@@ -1,11 +1,28 @@
 const std = @import("std");
-const insmod = @import("./insmod.zig");
 const kmsg = @import("./kmsg.zig");
-const modprobe = @import("./modprobe.zig");
 const sysinit = @import("./sysinit.zig");
+const syslog = @import("./syslog.zig");
 const test_backdoor = @import("./test-backdoor.zig");
 
-pub const std_options = kmsg.std_options;
+pub const std_options: std.Options = .{
+    .log_level = .debug,
+    .logFn = logFn,
+};
+
+var logger: enum { kmsg, syslog, default } = .default;
+
+fn logFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    return switch (logger) {
+        .kmsg => kmsg.logFn(level, scope, format, args),
+        .syslog => syslog.logFn(level, scope, format, args),
+        .default => std.log.defaultLog(level, scope, format, args),
+    };
+}
 
 pub fn main() !void {
     var args = std.process.args();
@@ -19,12 +36,10 @@ pub fn main() !void {
             name = args.next() orelse return error.MissingCommand;
             continue;
         } else if (std.mem.eql(u8, name, "sysinit")) {
+            logger = .kmsg;
             return sysinit.mixosMain(&args);
-        } else if (std.mem.eql(u8, name, "insmod")) {
-            return insmod.mixosMain(&args);
-        } else if (std.mem.eql(u8, name, "modprobe")) {
-            return modprobe.mixosMain(&args);
         } else if (std.mem.eql(u8, name, "test-backdoor")) {
+            logger = .syslog;
             return test_backdoor.mixosMain(&args);
         } else {
             break;
