@@ -36,10 +36,21 @@ pub fn main() !void {
             name = args.next() orelse return error.MissingCommand;
             continue;
         } else if (std.mem.eql(u8, name, "sysinit")) {
+            // We log to /dev/kmsg in sysinit since at this point in time syslogd is
+            // not yet started. The klogd process will pick up our userspace logs sent
+            // to the kernel and forward them to syslog.
+            kmsg.init();
+            defer kmsg.deinit();
             logger = .kmsg;
+
             return sysinit.mixosMain(&args);
         } else if (std.mem.eql(u8, name, "test-backdoor")) {
-            logger = .syslog;
+            if (!std.posix.isatty(std.fs.File.stdin().handle)) {
+                syslog.init("mixos-test-backdoor");
+                defer syslog.deinit();
+                logger = .syslog;
+            }
+
             return test_backdoor.mixosMain(&args);
         } else {
             break;

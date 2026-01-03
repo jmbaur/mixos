@@ -1,7 +1,12 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{
+        .default_target = .{
+            .abi = .musl,
+            .cpu_model = .baseline,
+        },
+    });
 
     const optimize = b.standardOptimizeOption(.{});
 
@@ -133,7 +138,8 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(kmod_symlinks);
 
     kmod_symlinks.makeFn = struct {
-        const tools = [_][]const u8{ "depmod", "insmod", "lsmod", "modinfo", "modprobe", "rmmod" };
+        // We purposefully leave out depmod, as we do not need it at runtime.
+        const tools = [_][]const u8{ "insmod", "lsmod", "modinfo", "modprobe", "rmmod" };
 
         fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
             const builder = step.owner;

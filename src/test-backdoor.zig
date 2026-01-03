@@ -1,5 +1,9 @@
 const std = @import("std");
-const syslog = @import("./syslog.zig");
+const C = @cImport({
+    @cInclude("sys/ioctl.h");
+    @cInclude("sys/socket.h");
+    @cInclude("linux/vm_sockets.h");
+});
 
 const Command = enum {
     run_command,
@@ -49,20 +53,19 @@ fn runCommand(allocator: std.mem.Allocator, writer: *std.Io.Writer, args: Client
     );
 }
 
-fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connection) !void {
+fn handleConnection(allocator: std.mem.Allocator, stream: *std.net.Stream) !void {
     var read_buf = [_]u8{0} ** 4096;
     var write_buf = [_]u8{0} ** 4096;
 
-    var stream = conn.stream.writer(&write_buf);
-    var stream_writer = &stream.interface;
+    var stream_writer = stream.writer(&write_buf);
 
     while (true) {
-        defer stream_writer.flush() catch {};
+        defer stream_writer.interface.flush() catch {};
 
         var message_writer = std.Io.Writer.Allocating.init(allocator);
         defer message_writer.deinit();
 
-        var stream_reader = conn.stream.reader(&read_buf);
+        var stream_reader = stream.reader(&read_buf);
         var reader: *std.Io.Reader = stream_reader.interface();
 
         while (true) {
@@ -79,52 +82,172 @@ fn handleConnection(allocator: std.mem.Allocator, conn: *std.net.Server.Connecti
             try std.json.Stringify.value(
                 ServerMessage{ .@"error" = err },
                 .{},
-                stream_writer,
+                &stream_writer.interface,
             );
             return;
         };
 
         const res = switch (message.value) {
-            .run_command => runCommand(allocator, stream_writer, message.value.run_command),
+            .run_command => runCommand(allocator, &stream_writer.interface, message.value.run_command),
         };
 
         res catch |err| {
-            try std.json.Stringify.value(ServerMessage{ .@"error" = err }, .{}, stream_writer);
+            try std.json.Stringify.value(ServerMessage{ .@"error" = err }, .{}, &stream_writer.interface);
         };
 
-        try stream_writer.writeByte(0);
+        try stream_writer.interface.writeByte(0);
+    }
+}
+
+fn currentCid() !u32 {
+    var vsock = try std.fs.cwd().openFile("/dev/vsock", .{});
+    defer vsock.close();
+
+    var cid: u32 = undefined;
+    if (0 != std.posix.system.ioctl(vsock.handle, C.IOCTL_VM_SOCKETS_GET_LOCAL_CID, &cid)) {
+        return error.UnknownLocalCid;
+    }
+    return cid;
+}
+
+const Protocol = union(enum) { inet, vsock: u32 };
+
+const ListenParam = struct {
+    protocol: Protocol,
+    port: u16,
+
+    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+        switch (self.protocol) {
+            .inet => try writer.print("inet6://[::]:{}", .{self.port}),
+            .vsock => |cid| try writer.print("vsock://{}:{}", .{ cid, self.port }),
+        }
+    }
+};
+
+fn parseListenArgs(arg: []const u8) !ListenParam {
+    var split = std.mem.splitScalar(u8, arg, ':');
+
+    const proto_str = split.next() orelse return error.MissingProtocol;
+
+    const protocol: Protocol = b: {
+        if (std.mem.eql(u8, proto_str, "inet")) {
+            break :b .inet;
+        } else if (std.mem.eql(u8, proto_str, "vsock")) {
+            break :b .{ .vsock = try currentCid() };
+        } else {
+            return error.InvalidProtocol;
+        }
+    };
+
+    const port = split.next() orelse return error.MissingPort;
+
+    return .{
+        .protocol = protocol,
+        .port = try std.fmt.parseInt(u16, port, 10),
+    };
+}
+
+fn parseKernelCmdline() !?ListenParam {
+    var buf: [1024]u8 = undefined;
+
+    var cmdline = try std.fs.cwd().openFile("/proc/cmdline", .{});
+    defer cmdline.close();
+
+    var cmdline_reader = cmdline.reader(&buf);
+
+    while (try cmdline_reader.interface.takeDelimiter(' ')) |entry| {
+        var entry_split = std.mem.splitScalar(u8, entry, '=');
+
+        if (std.mem.eql(u8, entry_split.next() orelse continue, "mixos.test_backdoor")) {
+            return parseListenArgs(entry_split.next() orelse continue) catch |err| {
+                std.log.warn("failed to parse mixos.test_backdoor= kernel param: {}", .{err});
+                continue;
+            };
+        }
+    }
+
+    return null;
+}
+
+fn detectDefaultProtocol() !Protocol {
+    if (std.fs.cwd().access("/dev/vsock", .{})) {
+        return .{ .vsock = try currentCid() };
+    } else |_| {
+        return .inet;
     }
 }
 
 pub fn mixosMain(args: *std.process.ArgIterator) !void {
-    syslog.init("mixos-test-backdoor");
-    defer syslog.deinit();
+    var listen_param: ListenParam = .{
+        .port = 8000,
+        .protocol = try detectDefaultProtocol(),
+    };
+
+    if (try parseKernelCmdline()) |param| {
+        listen_param = param;
+    }
+
+    if (args.next()) |arg| {
+        listen_param = try parseListenArgs(arg);
+    }
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    const port = if (args.next()) |arg| try std.fmt.parseInt(u16, arg, 10) else 8000;
+    const sock = try std.posix.socket(
+        switch (listen_param.protocol) {
+            .vsock => std.posix.AF.VSOCK,
+            .inet => std.posix.AF.INET6,
+        },
+        std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+        switch (listen_param.protocol) {
+            .vsock => 0,
+            .inet => std.posix.IPPROTO.TCP,
+        },
+    );
+    defer std.posix.close(sock);
 
-    const addr = try std.net.Address.parseIp("::", port);
+    switch (listen_param.protocol) {
+        .vsock => |cid| {
+            try std.posix.bind(sock, @ptrCast(&std.posix.sockaddr.vm{
+                .cid = cid,
+                .port = @as(u32, listen_param.port),
+                .flags = 0,
+            }), @sizeOf(std.posix.sockaddr.vm));
+        },
+        .inet => {
+            try std.posix.bind(sock, @ptrCast(&std.posix.sockaddr.in6{
+                .addr = [_]u8{0} ** 16, // TODO(jared): support custom bind address
+                .port = std.mem.nativeToBig(u16, listen_param.port),
+                .flowinfo = 0,
+                .scope_id = 0,
+            }), @sizeOf(std.posix.sockaddr.in6));
+        },
+    }
 
-    var server = try addr.listen(.{});
+    try std.posix.listen(sock, 0);
 
-    std.log.info("server listening on {f}", .{addr});
+    std.log.info("server listening on {f}", .{listen_param});
 
     while (true) {
         defer {
             _ = arena.reset(.retain_capacity);
         }
 
-        var conn = try server.accept();
-        defer conn.stream.close();
+        var client_addr: std.posix.sockaddr = undefined;
+        var addr_size: std.posix.socklen_t = @sizeOf(@TypeOf(client_addr));
+        var stream: std.net.Stream = .{ .handle = try std.posix.accept(
+            sock,
+            @ptrCast(&client_addr),
+            &addr_size,
+            std.posix.SOCK.CLOEXEC,
+        ) };
+        defer stream.close();
 
-        std.log.debug("connection started with {f}", .{conn.address});
-
-        handleConnection(arena.allocator(), &conn) catch |err| {
+        std.log.debug("connection started", .{});
+        handleConnection(arena.allocator(), &stream) catch |err| {
             std.log.err("connection handling failed: {}", .{err});
         };
-
-        std.log.debug("connection ended with {f}", .{conn.address});
+        std.log.debug("connection ended", .{});
     }
 }

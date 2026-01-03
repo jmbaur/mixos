@@ -18,6 +18,7 @@ in
     }
   );
 
+  # Test that out-of-tree kernel module loading works
   boot.extraModulePackages = [ config.boot.kernelPackages.jool ];
 
   boot.kernelModules = [
@@ -44,6 +45,15 @@ in
       .${pkgs.stdenv.hostPlatform.linuxArch} or "console";
     action = "askfirst";
     process = "/bin/sh";
+  };
+
+  init.host-mount = {
+    action = "once";
+    process = pkgs.writeScript "host-mount" ''
+      #!/bin/sh
+      mkdir -p /tmp/host
+      mount -t 9p -o trans=virtio,version=9p2000.L,msize=16384 host /tmp/host
+    '';
   };
 
   init.dhcp = {
