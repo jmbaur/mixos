@@ -33,10 +33,7 @@ pub fn deinit(self: *Kmod) void {
 
 /// Load a kernel module given a module name or alias. All kernel module
 /// loading is handled by libkmod.
-pub fn modprobe(
-    self: *Kmod,
-    module_query: []const u8,
-) !void {
+pub fn modprobe(self: *Kmod, module_query: []const u8) !void {
     var module_query_buf = std.mem.zeroes([std.fs.max_path_bytes:0]u8);
     std.mem.copyForwards(u8, &module_query_buf, module_query);
     const module_queryz = std.mem.sliceTo(&module_query_buf, 0);
@@ -57,6 +54,7 @@ pub fn modprobe(
     }
 
     var current_module_list: ?*C.kmod_list = module_list;
+    var has_error = false;
     while (current_module_list != null) : (current_module_list = C.kmod_list_next(module_list, current_module_list)) {
         const module = C.kmod_module_get_module(current_module_list);
         defer {
@@ -76,9 +74,15 @@ pub fn modprobe(
             .SUCCESS => {},
             else => {
                 log.err("failed to load module {s}: {}", .{ name, err });
+                has_error = true;
             },
         } else {
             log.err("unknown error loading module {s}", .{name});
+            has_error = true;
         }
+    }
+
+    if (has_error) {
+        return error.LoadModuleFailed;
     }
 }

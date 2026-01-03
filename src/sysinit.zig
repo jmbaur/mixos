@@ -424,7 +424,7 @@ fn mdevScan(allocator: std.mem.Allocator) !void {
     log.err("mdev failed with exit: {}", .{term});
 }
 
-pub fn mixosMain(args: *std.process.ArgIterator) !void {
+pub fn main(args: *std.process.ArgIterator) !void {
     done(.check) catch {
         log.err("sysinit already ran, skipping", .{});
         return;

@@ -100,68 +100,6 @@ pub fn build(b: *std.Build) void {
     libkmod.root_module.addIncludePath(kmod_dep.path("libkmod"));
     libkmod.installHeader(kmod_dep.path("libkmod/libkmod.h"), "libkmod/libkmod.h");
 
-    const kmod = b.addExecutable(.{
-        .name = "kmod",
-        .root_module = b.createModule(.{
-            .root_source_file = null,
-            .target = target,
-            .optimize = optimize,
-            .strip = optimize != .Debug,
-            .link_libc = true,
-        }),
-    });
-    kmod.root_module.addCSourceFiles(.{
-        .root = kmod_dep.path(""),
-        .flags = kmod_cflags.items,
-        .files = &.{
-            "tools/depmod.c",
-            "tools/insmod.c",
-            "tools/kmod.c",
-            "tools/log.c",
-            "tools/lsmod.c",
-            "tools/modinfo.c",
-            "tools/modprobe.c",
-            "tools/opt.c",
-            "tools/rmmod.c",
-            "tools/static-nodes.c",
-        },
-    });
-    kmod.root_module.addIncludePath(kmod_dep.path(""));
-    kmod.root_module.addIncludePath(kmod_dep.path("tools"));
-    kmod.root_module.linkLibrary(libkmod_shared);
-    kmod.root_module.linkLibrary(libkmod);
-    const kmod_install_artifact = b.addInstallArtifact(kmod, .{});
-    b.getInstallStep().dependOn(&kmod_install_artifact.step);
-
-    const kmod_symlinks = b.step("kmod-symlinks", "Create kmod symlinks");
-    kmod_symlinks.dependOn(&kmod_install_artifact.step);
-    b.getInstallStep().dependOn(kmod_symlinks);
-
-    kmod_symlinks.makeFn = struct {
-        // We purposefully leave out depmod, as we do not need it at runtime.
-        const tools = [_][]const u8{ "insmod", "lsmod", "modinfo", "modprobe", "rmmod" };
-
-        fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
-            const builder = step.owner;
-
-            var exe_dir = try std.fs.cwd().openDir(builder.exe_dir, .{});
-            defer exe_dir.close();
-
-            for (tools) |tool| {
-                while (true) {
-                    exe_dir.symLink("kmod", tool, .{}) catch |err| switch (err) {
-                        error.PathAlreadyExists => {
-                            try exe_dir.deleteFile(tool);
-                            continue;
-                        },
-                        else => return err,
-                    };
-                    break;
-                }
-            }
-        }
-    }.make;
-
     const mixos_rdinit_module = b.createModule(.{
         .root_source_file = b.path("src/rdinit.zig"),
         .target = target,
@@ -193,7 +131,37 @@ pub fn build(b: *std.Build) void {
         .name = "mixos",
         .root_module = mixos_module,
     });
-    b.installArtifact(mixos);
+
+    const mixos_install_artifact = b.addInstallArtifact(mixos, .{});
+    b.getInstallStep().dependOn(&mixos_install_artifact.step);
+
+    const mixos_symlinks = b.step("mixos-symlinks", "Create mixos symlinks");
+    mixos_symlinks.dependOn(&mixos_install_artifact.step);
+    b.getInstallStep().dependOn(mixos_symlinks);
+
+    mixos_symlinks.makeFn = struct {
+        const tools = [_][]const u8{"modprobe"};
+
+        fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
+            const builder = step.owner;
+
+            var exe_dir = try std.fs.cwd().openDir(builder.exe_dir, .{});
+            defer exe_dir.close();
+
+            for (tools) |tool| {
+                while (true) {
+                    exe_dir.symLink("mixos", tool, .{}) catch |err| switch (err) {
+                        error.PathAlreadyExists => {
+                            try exe_dir.deleteFile(tool);
+                            continue;
+                        },
+                        else => return err,
+                    };
+                    break;
+                }
+            }
+        }
+    }.make;
 
     const run_cmd = b.addRunArtifact(mixos);
 

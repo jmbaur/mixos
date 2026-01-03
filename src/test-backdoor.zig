@@ -177,7 +177,7 @@ fn detectDefaultProtocol() !Protocol {
     }
 }
 
-pub fn mixosMain(args: *std.process.ArgIterator) !void {
+pub fn main(args: *std.process.ArgIterator) !void {
     var listen_param: ListenParam = .{
         .port = 8000,
         .protocol = try detectDefaultProtocol(),

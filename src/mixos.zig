@@ -3,6 +3,7 @@ const kmsg = @import("./kmsg.zig");
 const sysinit = @import("./sysinit.zig");
 const syslog = @import("./syslog.zig");
 const test_backdoor = @import("./test-backdoor.zig");
+const modprobe = @import("./modprobe.zig");
 
 pub const std_options: std.Options = .{
     .log_level = .debug,
@@ -30,6 +31,8 @@ pub fn main() !void {
 
     var name = std.fs.path.basename(argv0);
 
+    const stdout_isatty = std.posix.isatty(std.fs.File.stdout().handle);
+
     var i: usize = 0;
     while (i < 2) : (i += 1) {
         if (i == 0 and std.mem.eql(u8, name, "mixos")) {
@@ -43,17 +46,30 @@ pub fn main() !void {
             defer kmsg.deinit();
             logger = .kmsg;
 
-            return sysinit.mixosMain(&args);
-        } else if (std.mem.eql(u8, name, "test-backdoor")) {
-            if (!std.posix.isatty(std.fs.File.stdin().handle)) {
-                syslog.init("mixos-test-backdoor");
-                defer syslog.deinit();
+            return sysinit.main(&args);
+        } else {
+            if (!stdout_isatty) {
+                var name_buf = std.mem.zeroes([std.fs.max_name_bytes:0]u8);
+                std.mem.copyForwards(u8, &name_buf, name);
+                const namez = std.mem.sliceTo(&name_buf, 0);
+
+                syslog.init(namez);
                 logger = .syslog;
             }
 
-            return test_backdoor.mixosMain(&args);
-        } else {
-            break;
+            defer {
+                if (!stdout_isatty) {
+                    syslog.deinit();
+                }
+            }
+
+            if (std.mem.eql(u8, name, "test-backdoor")) {
+                return test_backdoor.main(&args);
+            } else if (std.mem.eql(u8, name, "modprobe")) {
+                return modprobe.main(&args);
+            } else {
+                break;
+            }
         }
     }
 
