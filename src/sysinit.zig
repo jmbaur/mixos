@@ -1,6 +1,5 @@
 const std = @import("std");
 const system = std.posix.system;
-const kmsg = @import("./kmsg.zig");
 const Kmod = @import("./kmod.zig");
 const fs = @import("./fs.zig");
 const MS = std.os.linux.MS;
@@ -426,12 +425,6 @@ fn mdevScan(allocator: std.mem.Allocator) !void {
 }
 
 pub fn mixosMain(args: *std.process.ArgIterator) !void {
-    // We log to /dev/kmsg in sysinit since at this point in time syslogd is
-    // not yet started. The klogd process will pick up our userspace logs sent
-    // to the kernel and forward them to syslog.
-    kmsg.init();
-    defer kmsg.deinit();
-
     done(.check) catch {
         log.err("sysinit already ran, skipping", .{});
         return;

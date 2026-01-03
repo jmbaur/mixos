@@ -1,16 +1,16 @@
 const std = @import("std");
-const c = @cImport({
+const C = @cImport({
     @cInclude("syslog.h");
 });
 
 var log_buffer = std.mem.zeroes([1024]u8);
 
 pub fn init(name: [*c]const u8) void {
-    c.openlog(name, 0, c.LOG_USER);
+    C.openlog(name, 0, C.LOG_USER);
 }
 
 pub fn deinit() void {
-    c.closelog();
+    C.closelog();
 }
 
 pub fn logFn(
@@ -33,11 +33,11 @@ pub fn logFn(
         return;
     }
 
-    c.syslog(switch (message_level) {
-        .debug => c.LOG_DEBUG,
-        .err => c.LOG_ERR,
-        .info => c.LOG_INFO,
-        .warn => c.LOG_WARNING,
+    C.syslog(switch (message_level) {
+        .debug => C.LOG_DEBUG,
+        .err => C.LOG_ERR,
+        .info => C.LOG_INFO,
+        .warn => C.LOG_WARNING,
     }, @as([*c]const u8, @ptrCast(log_writer.buffer[0..log_writer.end])));
 
     // Resets `end`

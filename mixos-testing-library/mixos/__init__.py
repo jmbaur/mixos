@@ -3,6 +3,8 @@ from typing import TypedDict
 import json
 import logging
 import socket
+from enum import Enum
+
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +24,17 @@ class RunCommandResult(TypedDict):
     stderr: list[int]
 
 
+class Protocol(Enum):
+    INET = 1
+    VSOCK = 2
+
+
 class Machine:
-    def __init__(self, *args, **kwargs):
+    def __init__(self, conn):
         """
         Creates a new MixOS Machine
-
-        All args and kwargs are passed to `socket.create_connection()`.
         """
-        self.create_connection_args = args
-        self.create_connection_kwargs = kwargs
+        self.conn = Machine._parse_connection_string(conn)
         self.sock = None
 
     def __enter__(self):
@@ -45,20 +49,29 @@ class Machine:
         if self.sock is not None:
             self.sock.__exit__()
 
+    @staticmethod
+    def _parse_connection_string(conn):
+        split1 = conn.split(":", maxsplit=1)
+        assert len(split1) == 2
+        split2 = split1[1].rsplit(":", maxsplit=1)
+        assert len(split2) == 2
+        match split1[0]:
+            case "inet":
+                return (Protocol.INET, (split2[0].strip("[]"), int(split2[1])))
+            case "vsock":
+                return (Protocol.VSOCK, (int(split2[0]), int(split2[1])))
+            case _:
+                raise Exception("invalid protocol")
+
     def connect(self):
-        retries = 0
-        while True:
-            try:
-                logger.debug("attempting connection")
-                self.sock = socket.create_connection(
-                    *self.create_connection_args, **self.create_connection_kwargs
-                )
-                return
-            except OSError as e:
-                logger.info("connection failed, retrying")
-                retries += 1
-                if retries > 10:
-                    raise e
+        match self.conn[0]:
+            case Protocol.VSOCK:
+                logger.debug(f"connecting to vsock host {self.conn[1]}")
+                self.sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+                self.sock.connect(self.conn[1])
+            case Protocol.INET:
+                logger.debug(f"connecting to inet host {self.conn[1]}")
+                self.sock = socket.create_connection(self.conn[1])
 
     def recv_message(self):
         assert self.sock is not None
