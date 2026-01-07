@@ -663,7 +663,7 @@ in
             "/bin"
             "/etc"
             "/lib/firmware"
-            "/lib/modules"
+            "/lib/modules/${kernelPackage.modDirVersion}"
           ];
           ignoreCollisions = true;
           postBuild = ''
