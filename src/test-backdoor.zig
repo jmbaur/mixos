@@ -1,4 +1,5 @@
 const std = @import("std");
+const posix = std.posix;
 const C = @cImport({
     @cInclude("sys/ioctl.h");
     @cInclude("sys/socket.h");
@@ -104,7 +105,7 @@ fn currentCid() !u32 {
     defer vsock.close();
 
     var cid: u32 = undefined;
-    if (0 != std.posix.system.ioctl(vsock.handle, C.IOCTL_VM_SOCKETS_GET_LOCAL_CID, &cid)) {
+    if (0 != posix.system.ioctl(vsock.handle, C.IOCTL_VM_SOCKETS_GET_LOCAL_CID, &cid)) {
         return error.UnknownLocalCid;
     }
     return cid;
@@ -194,29 +195,44 @@ pub fn main(args: *std.process.ArgIterator) !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
-    const sock = try std.posix.socket(
+    const sockfd = try posix.socket(
         switch (listen_param.protocol) {
-            .vsock => std.posix.AF.VSOCK,
-            .inet => std.posix.AF.INET6,
+            .vsock => posix.AF.VSOCK,
+            .inet => posix.AF.INET6,
         },
-        std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC,
+        posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
         switch (listen_param.protocol) {
             .vsock => 0,
-            .inet => std.posix.IPPROTO.TCP,
+            .inet => posix.IPPROTO.IP,
         },
     );
-    defer std.posix.close(sock);
+    defer posix.close(sockfd);
+
+    try posix.setsockopt(
+        sockfd,
+        posix.SOL.SOCKET,
+        posix.SO.REUSEADDR,
+        &std.mem.toBytes(@as(c_int, 1)),
+    );
+    if (@hasDecl(posix.SO, "REUSEPORT")) {
+        try posix.setsockopt(
+            sockfd,
+            posix.SOL.SOCKET,
+            posix.SO.REUSEPORT,
+            &std.mem.toBytes(@as(c_int, 1)),
+        );
+    }
 
     switch (listen_param.protocol) {
         .vsock => |cid| {
-            try std.posix.bind(sock, @ptrCast(&std.posix.sockaddr.vm{
+            try std.posix.bind(sockfd, @ptrCast(&std.posix.sockaddr.vm{
                 .cid = cid,
                 .port = @as(u32, listen_param.port),
                 .flags = 0,
             }), @sizeOf(std.posix.sockaddr.vm));
         },
         .inet => {
-            try std.posix.bind(sock, @ptrCast(&std.posix.sockaddr.in6{
+            try std.posix.bind(sockfd, @ptrCast(&std.posix.sockaddr.in6{
                 .addr = [_]u8{0} ** 16, // TODO(jared): support custom bind address
                 .port = std.mem.nativeToBig(u16, listen_param.port),
                 .flowinfo = 0,
@@ -225,7 +241,7 @@ pub fn main(args: *std.process.ArgIterator) !void {
         },
     }
 
-    try std.posix.listen(sock, 0);
+    try std.posix.listen(sockfd, 1);
 
     std.log.info("server listening on {f}", .{listen_param});
 
@@ -237,7 +253,7 @@ pub fn main(args: *std.process.ArgIterator) !void {
         var client_addr: std.posix.sockaddr = undefined;
         var addr_size: std.posix.socklen_t = @sizeOf(@TypeOf(client_addr));
         var stream: std.net.Stream = .{ .handle = try std.posix.accept(
-            sock,
+            sockfd,
             @ptrCast(&client_addr),
             &addr_size,
             std.posix.SOCK.CLOEXEC,
