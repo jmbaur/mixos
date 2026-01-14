@@ -35,10 +35,7 @@ pub fn main() !void {
 
     var i: usize = 0;
     while (i < 2) : (i += 1) {
-        if (i == 0 and std.mem.eql(u8, name, "mixos")) {
-            name = args.next() orelse return error.MissingCommand;
-            continue;
-        } else if (std.mem.eql(u8, name, "sysinit")) {
+        if (std.mem.eql(u8, name, "sysinit")) {
             // We log to /dev/kmsg in sysinit since at this point in time syslogd is
             // not yet started. The klogd process will pick up our userspace logs sent
             // to the kernel and forward them to syslog.
@@ -67,10 +64,10 @@ pub fn main() !void {
                 return test_backdoor.main(&args);
             } else if (std.mem.eql(u8, name, "modprobe")) {
                 return modprobe.main(&args);
-            } else {
-                break;
             }
         }
+
+        name = args.next() orelse return error.MissingCommand;
     }
 
     return error.UnknownCommand;
