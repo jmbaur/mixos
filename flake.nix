@@ -140,7 +140,10 @@
             (python3.withPackages (p: [ (p.mixos-testing-library.override { __editable = true; }) ]))
             zig_0_15
           ];
-          shellHook = "export REPO_ROOT=$(git rev-parse --show-toplevel)";
+          shellHook = ''
+            unset ZIG_GLOBAL_CACHE_DIR
+            export REPO_ROOT=$(git rev-parse --show-toplevel)
+          '';
         };
       }) inputs.self.legacyPackages;
 
