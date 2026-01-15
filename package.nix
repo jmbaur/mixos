@@ -51,9 +51,11 @@ stdenvNoCC.mkDerivation (
 
     nativeBuildInputs = [ zig_0_15 ];
 
-    preHook = ''
+    configurePhase = ''
+      runHook preConfigure
       export ZIG_GLOBAL_CACHE_DIR=$TMPDIR
       ln -s ${deps} $ZIG_GLOBAL_CACHE_DIR/p
+      runHook postConfigure
     '';
 
     buildPhase = ''
