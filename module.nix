@@ -644,21 +644,39 @@ in
       ];
     }
     {
+      system.build.etc = pkgs.runCommand "mixos-etc" { } (
+        "mkdir -p $out"
+        + concatLines (
+          mapAttrsToList (
+            pathUnderEtc:
+            { source }:
+            ''
+              mkdir -p $(dirname $out/etc/${pathUnderEtc})
+              ln -sf ${source} $out/etc/${pathUnderEtc}
+            ''
+          ) config.etc
+        )
+      );
+
       system.build.root = checkAssertWarn config.assertions config.warnings (
         pkgs.buildEnv {
           name = "mixos-root";
-          paths =
-            map getBin (
-              config.bin
-              ++ [
-                pkgs.busybox
-                pkgs.mixos
-              ]
-            )
-            ++ map pkgs.compressFirmwareXz config.boot.firmware
-            ++ optionals hasModules (
-              [ (getOutput "modules" kernelPackage) ] ++ config.boot.extraModulePackages
-            );
+          paths = [
+            # Placed first so that it takes precedence over /etc contents in
+            # derivations further below.
+            config.system.build.etc
+          ]
+          ++ map getBin (
+            config.bin
+            ++ [
+              pkgs.busybox
+              pkgs.mixos
+            ]
+          )
+          ++ map pkgs.compressFirmwareXz config.boot.firmware
+          ++ optionals hasModules (
+            [ (getOutput "modules" kernelPackage) ] ++ config.boot.extraModulePackages
+          );
           pathsToLink = [
             "/bin"
             "/etc"
@@ -688,18 +706,6 @@ in
               find $out/lib/modules/${kernelPackage.modDirVersion}/ -name 'modules*' -not -name 'modules.builtin*' -not -name 'modules.order' -delete
               ${getExe' pkgs.buildPackages.kmod "depmod"} -b $out -C $out/etc/depmod.d -a ${kernelPackage.modDirVersion}
             ''}
-
-            # /etc
-            ${concatLines (
-              mapAttrsToList (
-                pathUnderEtc:
-                { source }:
-                ''
-                  mkdir -p $(dirname $out/etc/${pathUnderEtc})
-                  ln -sf ${source} $out/etc/${pathUnderEtc}
-                ''
-              ) config.etc
-            )}
           '';
         }
       );
