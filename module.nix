@@ -545,6 +545,7 @@ in
                     "CGROUPS"
                     "CONFIGFS_FS"
                     "DEBUG_FS_ALLOW_ALL"
+                    "FTRACE"
                     "MODULES"
                     "SHMEM"
                     "UNIX" # implies CONFIG_NET

@@ -10,6 +10,7 @@ const KernelConfig = struct {
     CGROUPS: bool,
     CONFIGFS_FS: bool,
     DEBUG_FS_ALLOW_ALL: bool,
+    FTRACE: bool,
     MODULES: bool,
     SHMEM: bool,
     UNIX98_PTYS: bool,
@@ -65,6 +66,16 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
             "/sys/kernel/debug",
             "debugfs",
             MS.NOEXEC | MS.NOSUID | MS.NODEV,
+            0,
+        ) catch {};
+    }
+
+    if (kernel.FTRACE) {
+        fs.mount(
+            "tracefs",
+            "/sys/kernel/tracing",
+            "tracefs",
+            MS.NOSUID | MS.NODEV | MS.NOEXEC | MS.RELATIME,
             0,
         ) catch {};
     }
