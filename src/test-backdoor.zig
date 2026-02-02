@@ -111,42 +111,33 @@ fn currentCid() !u32 {
     return cid;
 }
 
-const Protocol = union(enum) { inet, vsock: u32 };
-
-const ListenParam = struct {
-    protocol: Protocol,
-    port: u16,
+const ListenParam = union(enum) {
+    inet: std.net.Address,
+    vsock: struct { cid: u32, port: u16 },
 
     pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
-        switch (self.protocol) {
-            .inet => try writer.print("inet6://[::]:{}", .{self.port}),
-            .vsock => |cid| try writer.print("vsock://{}:{}", .{ cid, self.port }),
+        switch (self) {
+            .inet => |address| try writer.print("{f}", .{address}),
+            .vsock => |vsock| try writer.print("vsock:{}:{}", .{ vsock.cid, vsock.port }),
+        }
+    }
+
+    /// Supports the same strings as systemd.socket's ListenStream setting.
+    pub fn parse(arg: []const u8) !ListenParam {
+        if (std.mem.startsWith(u8, arg, "vsock:")) {
+            const vsock_arg = std.mem.trimStart(u8, arg, "vsock:");
+            var split = std.mem.splitScalar(u8, vsock_arg, ':');
+            const cid_arg = split.next() orelse return error.MissingCID;
+            const port_arg = split.next() orelse return error.MissingPort;
+            const cid = try std.fmt.parseInt(u32, cid_arg, 10);
+            const port = try std.fmt.parseInt(u16, port_arg, 10);
+            return .{ .vsock = .{ .cid = cid, .port = port } };
+        } else {
+            const address = try std.net.Address.parseIpAndPort(arg);
+            return .{ .inet = address };
         }
     }
 };
-
-fn parseListenArgs(arg: []const u8) !ListenParam {
-    var split = std.mem.splitScalar(u8, arg, ':');
-
-    const proto_str = split.next() orelse return error.MissingProtocol;
-
-    const protocol: Protocol = b: {
-        if (std.mem.eql(u8, proto_str, "inet")) {
-            break :b .inet;
-        } else if (std.mem.eql(u8, proto_str, "vsock")) {
-            break :b .{ .vsock = try currentCid() };
-        } else {
-            return error.InvalidProtocol;
-        }
-    };
-
-    const port = split.next() orelse return error.MissingPort;
-
-    return .{
-        .protocol = protocol,
-        .port = try std.fmt.parseInt(u16, port, 10),
-    };
-}
 
 fn parseKernelCmdline() !?ListenParam {
     var buf: [1024]u8 = undefined;
@@ -160,7 +151,7 @@ fn parseKernelCmdline() !?ListenParam {
         var entry_split = std.mem.splitScalar(u8, entry, '=');
 
         if (std.mem.eql(u8, entry_split.next() orelse continue, "mixos.test_backdoor")) {
-            return parseListenArgs(entry_split.next() orelse continue) catch |err| {
+            return ListenParam.parse(entry_split.next() orelse continue) catch |err| {
                 std.log.warn("failed to parse mixos.test_backdoor= kernel param: {}", .{err});
                 continue;
             };
@@ -170,41 +161,43 @@ fn parseKernelCmdline() !?ListenParam {
     return null;
 }
 
-fn detectDefaultProtocol() !Protocol {
+const default_port = 8000;
+
+fn detectDefaultListenParams() !ListenParam {
     if (std.fs.cwd().access("/dev/vsock", .{})) {
         const cid = try currentCid();
         if (cid > C.VMADDR_CID_HOST) {
-            return .{ .vsock = cid };
+            return .{ .vsock = .{ .cid = cid, .port = default_port } };
         }
     } else |_| {}
 
-    return .inet;
+    return .{ .inet = comptime std.net.Address.parseIp6(
+        "::",
+        default_port,
+    ) catch @compileError("invalid IPv6 address") };
 }
 
 pub fn main(args: *std.process.ArgIterator) !void {
-    var listen_param: ListenParam = .{
-        .port = 8000,
-        .protocol = try detectDefaultProtocol(),
-    };
+    var listen_param = try detectDefaultListenParams();
 
     if (try parseKernelCmdline()) |param| {
         listen_param = param;
     }
 
     if (args.next()) |arg| {
-        listen_param = try parseListenArgs(arg);
+        listen_param = try ListenParam.parse(arg);
     }
 
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
     const sockfd = try posix.socket(
-        switch (listen_param.protocol) {
+        switch (listen_param) {
             .vsock => posix.AF.VSOCK,
-            .inet => posix.AF.INET6,
+            .inet => |address| address.any.family,
         },
         posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
-        switch (listen_param.protocol) {
+        switch (listen_param) {
             .vsock => 0,
             .inet => posix.IPPROTO.IP,
         },
@@ -218,7 +211,7 @@ pub fn main(args: *std.process.ArgIterator) !void {
         &std.mem.toBytes(@as(c_int, 1)),
     );
 
-    if (listen_param.protocol == .inet and @hasDecl(posix.SO, "REUSEPORT")) {
+    if (listen_param == .inet and @hasDecl(posix.SO, "REUSEPORT")) {
         try posix.setsockopt(
             sockfd,
             posix.SOL.SOCKET,
@@ -227,21 +220,16 @@ pub fn main(args: *std.process.ArgIterator) !void {
         );
     }
 
-    switch (listen_param.protocol) {
-        .vsock => |cid| {
+    switch (listen_param) {
+        .vsock => |vsock| {
             try std.posix.bind(sockfd, @ptrCast(&std.posix.sockaddr.vm{
-                .cid = cid,
-                .port = @as(u32, listen_param.port),
+                .cid = vsock.cid,
+                .port = @as(u32, vsock.port),
                 .flags = 0,
             }), @sizeOf(std.posix.sockaddr.vm));
         },
-        .inet => {
-            try std.posix.bind(sockfd, @ptrCast(&std.posix.sockaddr.in6{
-                .addr = [_]u8{0} ** 16, // TODO(jared): support custom bind address
-                .port = std.mem.nativeToBig(u16, listen_param.port),
-                .flowinfo = 0,
-                .scope_id = 0,
-            }), @sizeOf(std.posix.sockaddr.in6));
+        .inet => |address| {
+            try std.posix.bind(sockfd, &address.any, address.getOsSockLen());
         },
     }
 

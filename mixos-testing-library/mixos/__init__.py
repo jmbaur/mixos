@@ -50,18 +50,19 @@ class Machine:
             self.sock.__exit__()
 
     @staticmethod
-    def _parse_connection_string(conn):
-        split1 = conn.split(":", maxsplit=1)
-        assert len(split1) == 2
-        split2 = split1[1].rsplit(":", maxsplit=1)
-        assert len(split2) == 2
-        match split1[0]:
-            case "inet":
-                return (Protocol.INET, (split2[0].strip("[]"), int(split2[1])))
-            case "vsock":
-                return (Protocol.VSOCK, (int(split2[0]), int(split2[1])))
-            case _:
-                raise Exception("invalid protocol")
+    def _parse_connection_string(conn: str):
+        if conn.startswith("vsock:"):
+            split = conn[len("vsock:"):].split(":", maxsplit=1)
+            assert len(split) == 2
+            cid = int(split[0])
+            port = int(split[1])
+            return (Protocol.VSOCK, (cid, port))
+        else:
+            split = conn.rsplit(":", maxsplit=1)
+            assert len(split) == 2
+            ip = split[0].strip("[]")
+            port = int(split[1])
+            return (Protocol.INET, (ip, port))
 
     def connect(self):
         match self.conn[0]:
