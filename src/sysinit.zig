@@ -255,6 +255,20 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
         };
     }
 
+    // Ensure /var persists data back to /state
+    b: {
+        const root_dir = try std.fs.path.joinZ(allocator, &.{ state.where, "root" });
+        defer allocator.free(root_dir);
+
+        std.fs.cwd().makePath(root_dir) catch |err| {
+            log.err("failed to create /root mount source: {}", .{err});
+            break :b;
+        };
+        fs.mount(root_dir, "/root", "", MS.BIND, 0) catch {
+            break :b;
+        };
+    }
+
     // Ensure /etc is writeable, needed by various programs.
     b: {
         const upper_etc_dir = try std.fs.path.joinZ(allocator, &.{ state.where, ".etc/upper" });
