@@ -172,10 +172,13 @@ fn parseKernelCmdline() !?ListenParam {
 
 fn detectDefaultProtocol() !Protocol {
     if (std.fs.cwd().access("/dev/vsock", .{})) {
-        return .{ .vsock = try currentCid() };
-    } else |_| {
-        return .inet;
-    }
+        const cid = try currentCid();
+        if (cid > C.VMADDR_CID_HOST) {
+            return .{ .vsock = cid };
+        }
+    } else |_| {}
+
+    return .inet;
 }
 
 pub fn main(args: *std.process.ArgIterator) !void {
