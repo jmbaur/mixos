@@ -214,7 +214,8 @@ pub fn main(args: *std.process.ArgIterator) !void {
         posix.SO.REUSEADDR,
         &std.mem.toBytes(@as(c_int, 1)),
     );
-    if (@hasDecl(posix.SO, "REUSEPORT")) {
+
+    if (listen_param.protocol == .inet and @hasDecl(posix.SO, "REUSEPORT")) {
         try posix.setsockopt(
             sockfd,
             posix.SOL.SOCKET,
