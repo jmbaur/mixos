@@ -689,7 +689,7 @@ in
           postBuild = ''
             # Our root filesystem is read-only, so we must create all top-level
             # directories for any future mountpoints.
-            mkdir -p $out/{etc,dev,proc,sys,var,tmp,state,root,passthru}
+            mkdir -p $out/{etc,dev,proc,sys,var,tmp,state,root,home,passthru}
 
             # pid 1
             ln -sf $out/bin/init $out/init

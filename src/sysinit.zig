@@ -226,47 +226,40 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
         if (data.writer.end > 0) @intFromPtr(state_mount_data.ptr) else 0,
     );
 
-    // Ensure /var persists data back to /state
-    b: {
-        const var_dir = try std.fs.path.joinZ(allocator, &.{ state.where, "var" });
-        defer allocator.free(var_dir);
+    // Ensure /var, /root, and /home persists data back to /state
+    for ([_][]const u8{ "var", "root", "home" }) |dir_name| {
+        b: {
+            const dir_relative_to_state = try std.fs.path.joinZ(allocator, &.{ state.where, dir_name });
+            defer allocator.free(dir_relative_to_state);
 
-        std.fs.cwd().makePath(var_dir) catch |err| {
-            log.err("failed to create /var mount source: {}", .{err});
-            break :b;
-        };
-        fs.mount(var_dir, "/var", "", MS.BIND, 0) catch {
-            break :b;
-        };
+            const dir_relative_to_root = try std.fs.path.joinZ(allocator, &.{dir_name});
+            defer allocator.free(dir_relative_to_root);
 
-        // Create /var/empty, useful in many contexts
-        std.fs.cwd().makePath("/var/empty") catch |err| {
-            log.err("failed to create /var/empty: {}", .{err});
-            break :b;
-        };
+            std.fs.cwd().makePath(dir_relative_to_state) catch |err| {
+                log.err("failed to create /{s} mount source: {}", .{ dir_name, err });
+                break :b;
+            };
+            fs.mount(dir_relative_to_state, dir_relative_to_root, "", MS.BIND, 0) catch {
+                break :b;
+            };
+        }
+    }
 
-        // Symlink /var/run to /run, which is a common symlink that is expected
-        // to exist by many tools.
-        var dir = std.fs.cwd().openDir("/var", .{}) catch break :b;
+    // Create /var/empty, useful in many contexts
+    std.fs.cwd().makePath("/var/empty") catch |err| {
+        log.err("failed to create /var/empty: {}", .{err});
+    };
+
+    // Symlink /var/run to /run, which is a common symlink that is expected
+    // to exist by many tools.
+    var var_dir = std.fs.cwd().openDir("/var", .{});
+    if (var_dir) |*dir| {
         defer dir.close();
         dir.symLink("../run", "run", .{ .is_directory = true }) catch |err| {
             log.err("failed to symlink /var/run to /run: {}", .{err});
-            break :b;
         };
-    }
-
-    // Ensure /var persists data back to /state
-    b: {
-        const root_dir = try std.fs.path.joinZ(allocator, &.{ state.where, "root" });
-        defer allocator.free(root_dir);
-
-        std.fs.cwd().makePath(root_dir) catch |err| {
-            log.err("failed to create /root mount source: {}", .{err});
-            break :b;
-        };
-        fs.mount(root_dir, "/root", "", MS.BIND, 0) catch {
-            break :b;
-        };
+    } else |err| {
+        log.err("failed to open /var: {}", .{err});
     }
 
     // Ensure /etc is writeable, needed by various programs.
