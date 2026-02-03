@@ -8,7 +8,11 @@ parser.add_argument(
     "-d", "--debug", action="store_true", help="Enable verbose logging", default=False
 )
 parser.add_argument(
-    "-a", "--address", type=str, help="Address of the MixOS machine", required=True
+    "-a",
+    "--address",
+    type=str,
+    required=True,
+    help="Address of the MixOS machine, of the form <ipv4>:<port>, [<ipv6>]:<port>, or vsock:<cid>:<port>",
 )
 parser.add_argument(
     "command",

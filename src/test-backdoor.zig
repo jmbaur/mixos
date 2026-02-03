@@ -112,17 +112,17 @@ fn currentCid() !u32 {
 }
 
 const ListenParam = union(enum) {
-    inet: std.net.Address,
+    address: std.net.Address,
     vsock: struct { cid: u32, port: u16 },
 
     pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
         switch (self) {
-            .inet => |address| try writer.print("{f}", .{address}),
+            .address => |address| try writer.print("{f}", .{address}),
             .vsock => |vsock| try writer.print("vsock:{}:{}", .{ vsock.cid, vsock.port }),
         }
     }
 
-    /// Supports the same strings as systemd.socket's ListenStream setting.
+    /// Supports most of the same strings as systemd.socket's ListenStream=.
     pub fn parse(arg: []const u8) !ListenParam {
         if (std.mem.startsWith(u8, arg, "vsock:")) {
             const vsock_arg = std.mem.trimStart(u8, arg, "vsock:");
@@ -132,9 +132,11 @@ const ListenParam = union(enum) {
             const cid = try std.fmt.parseInt(u32, cid_arg, 10);
             const port = try std.fmt.parseInt(u16, port_arg, 10);
             return .{ .vsock = .{ .cid = cid, .port = port } };
+        } else if (std.mem.startsWith(u8, arg, std.fs.path.sep_str)) {
+            return .{ .address = try std.net.Address.initUnix(arg) };
         } else {
             const address = try std.net.Address.parseIpAndPort(arg);
-            return .{ .inet = address };
+            return .{ .address = address };
         }
     }
 };
@@ -171,7 +173,7 @@ fn detectDefaultListenParams() !ListenParam {
         }
     } else |_| {}
 
-    return .{ .inet = comptime std.net.Address.parseIp6(
+    return .{ .address = comptime std.net.Address.parseIp6(
         "::",
         default_port,
     ) catch @compileError("invalid IPv6 address") };
@@ -194,12 +196,12 @@ pub fn main(args: *std.process.ArgIterator) !void {
     const sockfd = try posix.socket(
         switch (listen_param) {
             .vsock => posix.AF.VSOCK,
-            .inet => |address| address.any.family,
+            .address => |address| address.any.family,
         },
         posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
         switch (listen_param) {
             .vsock => 0,
-            .inet => posix.IPPROTO.IP,
+            .address => |address| if (address.any.family == posix.AF.UNIX) 0 else posix.IPPROTO.TCP,
         },
     );
     defer posix.close(sockfd);
@@ -211,7 +213,7 @@ pub fn main(args: *std.process.ArgIterator) !void {
         &std.mem.toBytes(@as(c_int, 1)),
     );
 
-    if (listen_param == .inet and @hasDecl(posix.SO, "REUSEPORT")) {
+    if (listen_param == .address and listen_param.address.any.family != posix.AF.UNIX and @hasDecl(posix.SO, "REUSEPORT")) {
         try posix.setsockopt(
             sockfd,
             posix.SOL.SOCKET,
@@ -228,7 +230,12 @@ pub fn main(args: *std.process.ArgIterator) !void {
                 .flags = 0,
             }), @sizeOf(std.posix.sockaddr.vm));
         },
-        .inet => |address| {
+        .address => |address| {
+            if (address.any.family == posix.AF.UNIX) {
+                try std.fs.cwd().deleteFileZ(
+                    address.un.path[0 .. address.un.path.len - 1 :0],
+                );
+            }
             try std.posix.bind(sockfd, &address.any, address.getOsSockLen());
         },
     }

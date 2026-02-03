@@ -4,6 +4,7 @@ import json
 import logging
 import socket
 from enum import Enum
+import os
 
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,8 @@ class RunCommandResult(TypedDict):
 
 class Protocol(Enum):
     INET = 1
-    VSOCK = 2
+    UNIX = 2
+    VSOCK = 3
 
 
 class Machine:
@@ -52,11 +54,13 @@ class Machine:
     @staticmethod
     def _parse_connection_string(conn: str):
         if conn.startswith("vsock:"):
-            split = conn[len("vsock:"):].split(":", maxsplit=1)
+            split = conn[len("vsock:") :].split(":", maxsplit=1)
             assert len(split) == 2
             cid = int(split[0])
             port = int(split[1])
             return (Protocol.VSOCK, (cid, port))
+        elif conn.startswith(os.path.sep):
+            return (Protocol.UNIX, conn)
         else:
             split = conn.rsplit(":", maxsplit=1)
             assert len(split) == 2
@@ -69,6 +73,10 @@ class Machine:
             case Protocol.VSOCK:
                 logger.debug(f"connecting to vsock host {self.conn[1]}")
                 self.sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+                self.sock.connect(self.conn[1])
+            case Protocol.UNIX:
+                logger.debug(f"connection to unix domain socket host {self.conn[1]}")
+                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
                 self.sock.connect(self.conn[1])
             case Protocol.INET:
                 logger.debug(f"connecting to inet host {self.conn[1]}")
