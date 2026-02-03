@@ -2,10 +2,14 @@ from mixos import Machine
 import logging
 from argparse import ArgumentParser, REMAINDER
 
-logging.basicConfig(level=logging.DEBUG)
 
 parser = ArgumentParser()
-parser.add_argument("conn", type=str, help="Connection string of the MixOS machine")
+parser.add_argument(
+    "-d", "--debug", action="store_true", help="Enable verbose logging", default=False
+)
+parser.add_argument(
+    "-a", "--address", type=str, help="Address of the MixOS machine", required=True
+)
 parser.add_argument(
     "command",
     type=str,
@@ -14,7 +18,9 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-with Machine(args.conn) as machine:
+logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
+
+with Machine(args.address) as machine:
     response = machine.run_command(args.command)
     print("exit_code: {}".format(response["exit_code"]))
     print("\nstdout:\n{}".format(bytes(response["stdout"]).decode().strip()))
