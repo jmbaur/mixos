@@ -704,6 +704,10 @@ in
             # path.
             ln -sfr $out/tmp $out/run
 
+            # Many pieces of software want to consume /etc/mtab. Systemd (via
+            # tmpfiles) symlinks it to /proc/self/mounts
+            ln -sfr $out/proc/self/mounts $out/etc/mtab
+
             ${optionalString hasModules ''
               find $out/lib/modules/${kernelPackage.modDirVersion}/ -name 'modules*' -not -name 'modules.builtin*' -not -name 'modules.order' -delete
               ${getExe' pkgs.buildPackages.kmod "depmod"} -b $out -C $out/etc/depmod.d -a ${kernelPackage.modDirVersion}

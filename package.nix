@@ -4,6 +4,7 @@
   zig_0_15,
 }:
 
+# TODO(jared): use zig's setup hook once https://github.com/NixOS/nixpkgs/commit/1dfa28594068cde0031ac471c48da20a18c67cd1 is in a stable release.
 stdenvNoCC.mkDerivation (
   finalAttrs:
   let

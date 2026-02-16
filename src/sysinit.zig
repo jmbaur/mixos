@@ -250,8 +250,9 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
         log.err("failed to create /var/empty: {}", .{err});
     };
 
-    // Symlink /var/run to /run, which is a common symlink that is expected
-    // to exist by many tools.
+    // Symlink /var/run to /run, which is a common symlink that is expected to
+    // exist by many tools. We cannot do this at build time since var is tied
+    // to /state, which is mounted at runtime.
     var var_dir = std.fs.cwd().openDir("/var", .{});
     if (var_dir) |*dir| {
         defer dir.close();
