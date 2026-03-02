@@ -1,5 +1,6 @@
 {
   lib,
+  nukeReferences,
   stdenvNoCC,
   zig_0_15,
 }:
@@ -39,9 +40,15 @@ stdenvNoCC.mkDerivation (
 
     __structuredAttrs = true;
     doCheck = true;
-    dontPatchELF = true;
-    dontStrip = true;
     strictDeps = true;
+
+    nativeBuildInputs = [
+      nukeReferences
+      zig_0_15
+    ];
+
+    # Prevent zig (or anything else) from being in the runtime closure
+    allowedReferences = [ ];
 
     zigBuildFlags = [
       "--color off"
@@ -49,8 +56,6 @@ stdenvNoCC.mkDerivation (
       "-Dcpu=baseline"
       "-Dtarget=${stdenvNoCC.hostPlatform.qemuArch}-${stdenvNoCC.hostPlatform.parsed.kernel.name}"
     ];
-
-    nativeBuildInputs = [ zig_0_15 ];
 
     configurePhase = ''
       runHook preConfigure
@@ -75,6 +80,12 @@ stdenvNoCC.mkDerivation (
       runHook preInstall
       zig build install -j$NIX_BUILD_CORES --prefix "$out" ''${zigBuildFlags[@]}
       runHook postInstall
+    '';
+
+    postFixup = ''
+      find $out/bin $out/libexec -type f | while read i; do
+        nuke-refs -e $out $i
+      done
     '';
 
     meta = {
