@@ -547,6 +547,7 @@ in
                     "DEBUG_FS_ALLOW_ALL"
                     "FTRACE"
                     "MODULES"
+                    "SECURITY"
                     "SECURITYFS"
                     "SHMEM"
                     "UNIX" # implies CONFIG_NET

@@ -12,6 +12,7 @@ const KernelConfig = struct {
     DEBUG_FS_ALLOW_ALL: bool,
     FTRACE: bool,
     MODULES: bool,
+    SECURITY: bool,
     SECURITYFS: bool,
     SHMEM: bool,
     UNIX98_PTYS: bool,
@@ -81,7 +82,8 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
         ) catch {};
     }
 
-    if (kernel.SECURITYFS) {
+    // /sys/kernel/security directory only exists if both these KConfig options are enabled, see https://github.com/torvalds/linux/blob/c612261bedd6bbab7109f798715e449c9d20ff2f/security/inode.c#L366
+    if (kernel.SECURITY and kernel.SECURITYFS) {
         fs.mount(
             "securityfs",
             "/sys/kernel/security",
