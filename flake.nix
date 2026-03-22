@@ -18,10 +18,181 @@
     in
     {
       overlays.default = final: prev: {
-        mixos = final.callPackage ./package.nix { };
+        mixos = final.callPackage (
+          {
+            lib,
+            nukeReferences,
+            stdenvNoCC,
+            zig_0_15,
+          }:
+
+          # TODO(jared): use zig's setup hook once https://github.com/NixOS/nixpkgs/commit/1dfa28594068cde0031ac471c48da20a18c67cd1 is in a stable release.
+          stdenvNoCC.mkDerivation (
+            finalAttrs:
+            let
+              deps = stdenvNoCC.mkDerivation {
+                pname = finalAttrs.pname + "-deps";
+                inherit (finalAttrs) src version;
+                depsBuildBuild = [ zig_0_15 ];
+                buildCommand = ''
+                  export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d)
+                  runHook unpackPhase
+                  cd $sourceRoot
+                  zig build --fetch
+                  mv $ZIG_GLOBAL_CACHE_DIR/p $out
+                '';
+                outputHashAlgo = null;
+                outputHashMode = "recursive";
+                outputHash = "sha256-Sh3vZrYzpXkhvFTFH5RGm5nzwPO2gaSeLrp/k9bKXDs=";
+              };
+            in
+            {
+              pname = "mixos";
+              version = "0.1.0";
+
+              src = lib.fileset.toSource {
+                root = ./.;
+                fileset = lib.fileset.unions [
+                  ./build.zig
+                  ./build.zig.zon
+                  ./com.jmbaur.mixos.varlink
+                  ./src
+                ];
+              };
+
+              __structuredAttrs = true;
+              doCheck = true;
+              strictDeps = true;
+
+              nativeBuildInputs = [
+                nukeReferences
+                zig_0_15
+              ];
+
+              # Prevent zig (or anything else) from being in the runtime closure
+              allowedReferences = [ ];
+
+              zigBuildFlags = [
+                "--color off"
+                "-Doptimize=ReleaseSafe"
+                "-Dcpu=baseline"
+                "-Dtarget=${stdenvNoCC.hostPlatform.qemuArch}-${stdenvNoCC.hostPlatform.parsed.kernel.name}"
+              ];
+
+              configurePhase = ''
+                runHook preConfigure
+                export ZIG_GLOBAL_CACHE_DIR=$TMPDIR
+                ln -s ${deps} $ZIG_GLOBAL_CACHE_DIR/p
+                runHook postConfigure
+              '';
+
+              buildPhase = ''
+                runHook preBuild
+                zig build -j$NIX_BUILD_CORES ''${zigBuildFlags[@]}
+                runHook postBuild
+              '';
+
+              checkPhase = ''
+                runHook preCheck
+                zig build test -j$NIX_BUILD_CORES ''${zigBuildFlags[@]}
+                runHook postCheck
+              '';
+
+              installPhase = ''
+                runHook preInstall
+                zig build install -j$NIX_BUILD_CORES --prefix "$out" ''${zigBuildFlags[@]}
+                runHook postInstall
+              '';
+
+              postFixup = ''
+                find $out/bin $out/libexec -type f | while read i; do
+                  nuke-refs -e $out $i
+                done
+              '';
+
+              meta = {
+                platforms = lib.platforms.linux;
+                mainProgram = "mixos";
+              };
+            }
+          )
+        ) { };
         pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
           (pyfinal: _: {
-            mixos-testing-library = pyfinal.callPackage ./mixos-testing-library/package.nix { };
+            mixos-testing-library = builtins.warn "mixos-testing-library is a deprecated alias, use mixos instead" pyfinal.mixos;
+            mixos = pyfinal.callPackage (
+              {
+                __editable ? false,
+                buildPythonPackage,
+                lib,
+                mkPythonEditablePackage,
+                setuptools,
+                varlink,
+              }:
+
+              let
+                pname = pyproject.project.name;
+                inherit (pyproject.project) version;
+                pyproject = lib.importTOML ./pyproject.toml;
+                build-system = [ setuptools ];
+                dependencies = [ varlink ];
+              in
+              if __editable then
+                mkPythonEditablePackage {
+                  inherit
+                    pname
+                    version
+                    build-system
+                    dependencies
+                    ;
+
+                  root = "$REPO_ROOT";
+                }
+              else
+                buildPythonPackage {
+                  inherit
+                    pname
+                    version
+                    build-system
+                    dependencies
+                    ;
+
+                  pyproject = true;
+
+                  src = lib.fileset.toSource {
+                    root = ./.;
+                    fileset = lib.fileset.unions [
+                      ./pyproject.toml
+                      ./mixos
+                    ];
+                  };
+
+                  meta.mainProgram = "mixos";
+                }
+            ) { };
+            varlink = pyfinal.callPackage (
+              {
+                buildPythonPackage,
+                fetchFromGitHub,
+                setuptools,
+                setuptools-scm,
+              }:
+              buildPythonPackage {
+                pname = "varlink";
+                version = "32.1.0";
+                pyproject = true;
+                build-system = [
+                  setuptools
+                  setuptools-scm
+                ];
+                src = fetchFromGitHub {
+                  owner = "varlink";
+                  repo = "python";
+                  tag = "32.1.0";
+                  hash = "sha256-cdTQ5OIhyPts3wuiyWZjEv9ItbHRlKbHd0nW0eAnj6s=";
+                };
+              }
+            ) { };
           })
         ];
       };
@@ -137,7 +308,8 @@
       devShells = mapAttrs (_: pkgs: {
         default = pkgs.mkShell {
           packages = with pkgs; [
-            (python3.withPackages (p: [ (p.mixos-testing-library.override { __editable = true; }) ]))
+            (python3.withPackages (p: [ (p.mixos.override { __editable = true; }) ]))
+            libvarlink
             zig_0_15
           ];
           shellHook = ''

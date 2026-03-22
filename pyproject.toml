@@ -1,7 +1,7 @@
 [project]
 name = "mixos-testing-library"
 version = "0.1.0"
-dependencies = ["schema>=0.7"]
+dependencies = ["varlink>=32.1.0"]
 
 [build-system]
 requires = ["setuptools"]

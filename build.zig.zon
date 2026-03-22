@@ -2,12 +2,16 @@
     .name = .mixos,
     .version = "0.1.0",
     .fingerprint = 0x9025926ecf183446,
-    .minimum_zig_version = "0.15.1",
-    .paths = .{ "build.zig", "build.zig.zon", "src" },
+    .minimum_zig_version = "0.15.2",
+    .paths = .{ "build.zig", "build.zig.zon", "com.jmbaur.mixos.varlink", "src" },
     .dependencies = .{
         .kmod = .{
             .url = "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git/snapshot/kmod-34.2.tar.gz",
             .hash = "N-V-__8AACXSEAC4vv9Dh65rS1ICs847KPjvNop6RIHJUDNN",
+        },
+        .varlink = .{
+            .url = "https://github.com/jmbaur/zig-varlink/archive/883d5f0420061b04ab0d5c980b655be185eba0b5.tar.gz",
+            .hash = "N-V-__8AAIoyAgCSaZMjkoL8IOvRqnouU_QcrBgyfDvPMJJD",
         },
     },
 }

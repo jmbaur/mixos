@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const varlink = @import("varlink");
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{
         .default_target = .{
@@ -11,6 +13,14 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const kmod_dep = b.dependency("kmod", .{});
+    const varlink_build_dep = b.dependency("varlink", .{
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    const varlink_dep = b.dependency("varlink", .{
+        .target = target,
+        .optimize = optimize,
+    });
 
     var kmod_cflags: std.ArrayList([]const u8) = .{};
     defer kmod_cflags.deinit(b.allocator);
@@ -116,6 +126,8 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mixos_module.linkLibrary(libkmod);
+    mixos_module.addImport("varlink", varlink_dep.module("varlink"));
+    mixos_module.addImport("mixos_varlink", varlink.scanFile(b, varlink_build_dep.artifact("zig-varlink-scanner"), b.path("com.jmbaur.mixos.varlink"), "com-jmbaur-mixos.zig"));
 
     const mixos_rdinit = b.addExecutable(.{
         .name = "mixos-rdinit",

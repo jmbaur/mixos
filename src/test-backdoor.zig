@@ -1,4 +1,6 @@
 const std = @import("std");
+const varlink = @import("varlink");
+const mixos_varlink = @import("mixos_varlink");
 const posix = std.posix;
 const C = @cImport({
     @cInclude("sys/ioctl.h");
@@ -6,97 +8,88 @@ const C = @cImport({
     @cInclude("linux/vm_sockets.h");
 });
 
-const Command = enum {
-    run_command,
+const Context = struct {
+    pub const vendor = "jmbaur";
+    pub const product = "mixos";
+    pub const version = "0.1.0";
+    pub const url = "http://github.com/jmbaur/mixos";
+    @"com.jmbaur.mixos": struct {
+        pub const interface = mixos_varlink;
+        pub fn handleRunCommand(
+            context: *@This(),
+            parameters: mixos_varlink.RunCommand.Parameters,
+            request_context: anytype,
+        ) !void {
+            _ = context;
+
+            const run_result = try std.process.Child.run(.{
+                .allocator = request_context.getData(),
+                .argv = parameters.command,
+                .max_output_bytes = std.math.maxInt(usize),
+            });
+
+            try request_context.serializeResponse(.{
+                .exit_code = switch (run_result.term) {
+                    .Exited => |exited| @as(u32, exited),
+                    .Signal => |signal| signal,
+                    .Stopped => |stopped| stopped,
+                    .Unknown => |unknown| unknown,
+                },
+                .stderr = run_result.stderr,
+                .stdout = run_result.stdout,
+            });
+        }
+    } = .{},
 };
 
-const ClientMessage = union(Command) {
-    run_command: ClientCommandMessage,
-};
+const Connection = varlink.server.Connection(
+    Context,
+    std.mem.Allocator,
+);
 
-const ClientCommandMessage = struct {
-    command: []const []const u8,
-};
-
-const RunResult = struct {
-    exit_code: u32,
-    stdout: []u8,
-    stderr: []u8,
-};
-
-const ServerMessage = union(enum) {
-    @"error": anyerror,
-    result: union(Command) {
-        run_command: RunResult,
-    },
-};
-
-fn runCommand(allocator: std.mem.Allocator, writer: *std.Io.Writer, args: ClientCommandMessage) anyerror!void {
-    const run_result = try std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = args.command,
-        .max_output_bytes = std.math.maxInt(usize),
-    });
-
-    try std.json.Stringify.value(
-        ServerMessage{ .result = .{ .run_command = .{
-            .exit_code = switch (run_result.term) {
-                .Exited => |exited| @as(u32, exited),
-                .Signal => |signal| signal,
-                .Stopped => |stopped| stopped,
-                .Unknown => |unknown| unknown,
-            },
-            .stderr = run_result.stderr,
-            .stdout = run_result.stdout,
-        } } },
-        .{ .emit_strings_as_arrays = true },
-        writer,
+fn handleRequest(
+    allocator: std.mem.Allocator,
+    connection: *Connection,
+    reader: anytype,
+    context: *Context,
+) !void {
+    const request = try readMessage(reader);
+    try connection.handleRequest(
+        request,
+        allocator,
+        context,
     );
 }
 
-fn handleConnection(allocator: std.mem.Allocator, stream: *std.net.Stream) !void {
-    var read_buf = [_]u8{0} ** 4096;
-    var write_buf = [_]u8{0} ** 4096;
+fn readMessage(reader: *std.Io.Reader) ![]u8 {
+    const res = try reader.takeDelimiterExclusive(0);
+    reader.toss(1);
+    return res;
+}
 
-    var stream_writer = stream.writer(&write_buf);
+fn handleConnection(allocator: std.mem.Allocator, stream: *std.net.Stream) !void {
+    var read_buffer: [1024]u8 = undefined;
+    var reader = stream.reader(&read_buffer);
+    var context: Context = .{};
+
+    var write_buffer: [1024]u8 = undefined;
+    var writer = stream.writer(&write_buffer);
+    var varlink_connection: Connection = .{
+        .response_writer = &writer.interface,
+        .data = allocator,
+    };
 
     while (true) {
-        defer stream_writer.interface.flush() catch {};
-
-        var message_writer = std.Io.Writer.Allocating.init(allocator);
-        defer message_writer.deinit();
-
-        var stream_reader = stream.reader(&read_buf);
-        var reader: *std.Io.Reader = stream_reader.interface();
-
-        while (true) {
-            const end = try reader.streamDelimiterEnding(&message_writer.writer, 0);
-            if (reader.bufferedLen() == 0) {
-                return;
-            }
-            if (end == 0) {
-                break;
-            }
-        }
-
-        const message = std.json.parseFromSlice(ClientMessage, allocator, message_writer.written(), .{}) catch |err| {
-            try std.json.Stringify.value(
-                ServerMessage{ .@"error" = err },
-                .{},
-                &stream_writer.interface,
-            );
-            return;
+        handleRequest(
+            allocator,
+            &varlink_connection,
+            reader.interface(),
+            &context,
+        ) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
         };
-
-        const res = switch (message.value) {
-            .run_command => runCommand(allocator, &stream_writer.interface, message.value.run_command),
-        };
-
-        res catch |err| {
-            try std.json.Stringify.value(ServerMessage{ .@"error" = err }, .{}, &stream_writer.interface);
-        };
-
-        try stream_writer.interface.writeByte(0);
+        try writer.interface.flush();
     }
 }
 

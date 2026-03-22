@@ -55,7 +55,7 @@ pub fn main() !void {
             }
 
             defer {
-                if (!stdout_isatty) {
+                if (logger == .syslog) {
                     syslog.deinit();
                 }
             }

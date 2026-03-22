@@ -1,6 +1,6 @@
+from argparse import ArgumentParser, REMAINDER
 from mixos import Machine
 import logging
-from argparse import ArgumentParser, REMAINDER
 
 
 parser = ArgumentParser()
@@ -24,8 +24,9 @@ args = parser.parse_args()
 
 logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
 
+
 with Machine(args.address) as machine:
-    response = machine.run_command(args.command)
+    response = machine.RunCommand(args.command)
     print("exit_code: {}".format(response["exit_code"]))
-    print("\nstdout:\n{}".format(bytes(response["stdout"]).decode().strip()))
-    print("\nstderr:\n{}".format(bytes(response["stderr"]).decode().strip()))
+    print("\nstdout:\n{}".format(response["stdout"].strip()))
+    print("\nstderr:\n{}".format(response["stderr"].strip()))

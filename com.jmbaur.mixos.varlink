@@ -1,0 +1,3 @@
+interface com.jmbaur.mixos
+
+method RunCommand(command: []string) -> (exit_code: int, stdout: string, stderr: string)
