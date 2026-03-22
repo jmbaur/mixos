@@ -1,6 +1,6 @@
 [project]
 name = "mixos-testing-library"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = ["varlink>=32.1.0"]
 
 [build-system]
