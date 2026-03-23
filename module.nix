@@ -699,10 +699,7 @@ in
             ln -sf $out/bin $out/sbin
 
             # /tmp is setup as a tmpfs on bootup, symlink it to /run since some
-            # programs want to write there, but all should be ephemeral. We
-            # spawn a subshell so that we can have our symlink(s) be relative
-            # to the nix output, not the full path including the nix output
-            # path.
+            # programs want to write there, but all should be ephemeral.
             ln -sfr $out/tmp $out/run
 
             # Many pieces of software want to consume /etc/mtab. Systemd (via
