@@ -477,7 +477,9 @@ pub fn main(args: *std.process.ArgIterator) !void {
 
     mountFilesystems(&sysinit_config.value.boot.kernel);
 
-    try setupModprobeAndLoadModules(allocator, &sysinit_config.value.boot.kernel, sysinit_config.value.boot.kernelModules);
+    setupModprobeAndLoadModules(allocator, &sysinit_config.value.boot.kernel, sysinit_config.value.boot.kernelModules) catch |err| {
+        log.err("failed to load modules: {}", .{err});
+    };
 
     mdevScan(allocator) catch |err| {
         log.err("failed to run mdev: {}", .{err});
