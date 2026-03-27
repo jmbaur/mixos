@@ -1,4 +1,6 @@
+from argparse import ArgumentParser, REMAINDER
 from enum import Enum
+import logging
 import logging
 import os
 import socket
@@ -78,3 +80,36 @@ class Machine(varlink.SimpleClientInterfaceHandler):
             raise varlink.InterfaceNotFound(interface_name)
 
         super().__init__(client._interfaces[interface_name], sock, namespaced=False)
+
+
+def cli():
+    parser = ArgumentParser()
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        help="Enable verbose logging",
+        default=False,
+    )
+    parser.add_argument(
+        "-a",
+        "--address",
+        type=str,
+        required=True,
+        help="Address of the MixOS machine, of the form <ipv4>:<port>, [<ipv6>]:<port>, or vsock:<cid>:<port>",
+    )
+    parser.add_argument(
+        "command",
+        type=str,
+        nargs=REMAINDER,
+        help="Command to run on MixOS machine",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
+
+    with Machine(args.address) as machine:
+        response = machine.RunCommand(args.command)
+        print("exit_code: {}".format(response["exit_code"]))
+        print("\nstdout:\n{}".format(response["stdout"].strip()))
+        print("\nstderr:\n{}".format(response["stderr"].strip()))

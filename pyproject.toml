@@ -7,4 +7,4 @@ dependencies = ["varlink>=32.1.0"]
 requires = ["setuptools"]
 
 [project.scripts]
-mixos = "mixos:__main__"
+mixos = "mixos:cli"
