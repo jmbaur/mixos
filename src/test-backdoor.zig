@@ -22,6 +22,11 @@ const Context = struct {
         ) !void {
             _ = context;
 
+            if (parameters.command.len == 0) {
+                try request_context.serializeError(mixos_varlink.MissingCommand{});
+                return;
+            }
+
             const run_result = try std.process.Child.run(.{
                 .allocator = request_context.getData(),
                 .argv = parameters.command,
