@@ -12,6 +12,8 @@ pub const std_options: std.Options = .{
 
 var logger: enum { kmsg, syslog, default } = .default;
 
+const log = std.log.scoped(.mixos);
+
 fn logFn(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.EnumLiteral),
@@ -43,7 +45,13 @@ pub fn main() !void {
             defer kmsg.deinit();
             logger = .kmsg;
 
-            return sysinit.main(&args);
+            if (sysinit.main(&args)) {
+                log.debug("sysinit complete", .{});
+                return;
+            } else |err| {
+                log.err("sysinit failed: {}", .{err});
+                return err;
+            }
         } else {
             if (!stdout_isatty) {
                 var name_buf = std.mem.zeroes([std.fs.max_name_bytes:0]u8);
