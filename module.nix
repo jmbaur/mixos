@@ -757,7 +757,7 @@ in
               mapAttrsToList (name: service: ''
                 mkdir -p $out/etc/service/${name}
                 ln -sf ${service.run} $out/etc/service/${name}/run
-              '') config.services
+              '') (filterAttrs (const (service: service.enable)) config.services)
             )}
           '';
         }
