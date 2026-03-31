@@ -579,12 +579,12 @@ in
 
         init = {
           action = "restart";
-          process = "/sbin/init";
+          process = mkDefault "/bin/init";
         };
 
         reboot = {
           action = "ctrlaltdel";
-          process = mkDefault "/sbin/reboot";
+          process = mkDefault "/bin/reboot";
         };
 
         umount = {
