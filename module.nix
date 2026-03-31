@@ -283,7 +283,7 @@ in
                 type = types.bool;
                 default = true;
                 description = ''
-                  Whether to enable this process on startup.
+                  Whether to enable this process.
                 '';
               };
 
@@ -348,6 +348,41 @@ in
           }
         )
       );
+    };
+
+    services = mkOption {
+      type = types.attrsOf (
+        types.submodule (
+          { ... }:
+          {
+            options = {
+              enable = mkOption {
+                type = types.bool;
+                default = true;
+                description = ''
+                  Whether to enable this service.
+                '';
+              };
+
+              run = mkOption {
+                type = types.path;
+                example = ''
+                  pkgs.writeScript "silly" \'\'
+                  #!/bin/sh
+                  while true; do
+                    date | logger -t silly
+                  done
+                  \'\'
+                '';
+                description = ''
+                  Specifies the process to be executed for this service.
+                '';
+              };
+            };
+          }
+        )
+      );
+      default = { };
     };
 
     mdev.rules = mkOption {
@@ -607,6 +642,11 @@ in
           process = mkDefault "/bin/mdev -d -f -S";
         };
 
+        runsvdir = {
+          action = "respawn";
+          process = mkDefault "/bin/runsvdir -P /etc/service";
+        };
+
         crond = {
           action = "respawn";
           process = mkDefault "/bin/crond -f -S";
@@ -690,7 +730,7 @@ in
           postBuild = ''
             # Our root filesystem is read-only, so we must create all top-level
             # directories for any future mountpoints.
-            mkdir -p $out/{etc,dev,proc,sys,var,tmp,state,root,home,passthru}
+            mkdir -p $out/{dev,proc,sys,var,tmp,state,root,home,passthru}
 
             # pid 1
             ln -sf $out/bin/init $out/init
@@ -706,10 +746,22 @@ in
             # tmpfiles) symlinks it to /proc/self/mounts
             ln -sfr $out/proc/self/mounts $out/etc/mtab
 
+            # Regenerate kmod's modules* files. This picks up any out-of-tree
+            # modules that might be included in the configuration.
             ${optionalString hasModules ''
               find $out/lib/modules/${kernelPackage.modDirVersion}/ -name 'modules*' -not -name 'modules.builtin*' -not -name 'modules.order' -delete
               ${getExe' pkgs.buildPackages.kmod "depmod"} -b $out -C $out/etc/depmod.d -a ${kernelPackage.modDirVersion}
             ''}
+
+            # Create service directories. We do the work here since it doesn't
+            # work with buildEnv, as that would create symlinks back to
+            # read-only nix store directories, which clashes with runsv.
+            ${concatLines (
+              mapAttrsToList (name: service: ''
+                mkdir -p $out/etc/service/${name}
+                ln -sf ${service.run} $out/etc/service/${name}/run
+              '') config.services
+            )}
           '';
         }
       );

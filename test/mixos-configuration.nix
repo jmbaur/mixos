@@ -61,6 +61,13 @@ in
     process = "/bin/udhcpc -f -S";
   };
 
+  services.silly.run = pkgs.writeScript "silly" ''
+    #!/bin/sh
+    while true; do
+      date | logger -t silly
+    done
+  '';
+
   etc."ntp.conf".source = pkgs.writeText "ntp.conf" ''
     server time.nist.gov
   '';
