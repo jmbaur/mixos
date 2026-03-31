@@ -656,14 +656,11 @@ in
           action = "respawn";
           process = "/bin/ntpd -n";
         });
+      };
 
-        test-backdoor = {
-          inherit (config.mixos.testing) enable;
-          action = "respawn";
-          process = toString [
-            (getExe pkgs.mixos)
-            "test-backdoor"
-          ];
+      services = {
+        test-backdoor = mkIf config.mixos.testing.enable {
+          run = getExe' pkgs.mixos "test-backdoor";
         };
       };
     }

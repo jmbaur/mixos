@@ -152,7 +152,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(mixos_symlinks);
 
     mixos_symlinks.makeFn = struct {
-        const tools = [_][]const u8{"modprobe"};
+        const tools = [_][]const u8{ "modprobe", "test-backdoor" };
 
         fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
             const builder = step.owner;
