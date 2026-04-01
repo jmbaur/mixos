@@ -366,15 +366,7 @@ in
 
               run = mkOption {
                 type = types.path;
-                example = ''
-                  pkgs.writeScript "silly" \'\'
-                  #!/bin/sh
-                  while true; do
-                    date | logger -t silly
-                    sleep 1
-                  done
-                  \'\'
-                '';
+                example = literalExpression "/bin/httpd";
                 description = ''
                   Specifies the process to be executed for this service.
                 '';
