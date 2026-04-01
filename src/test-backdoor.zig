@@ -165,9 +165,12 @@ const default_port = 8000;
 
 fn detectDefaultListenParams() !ListenParam {
     if (std.fs.cwd().access("/dev/vsock", .{})) {
-        const cid = try currentCid();
-        if (cid > C.VMADDR_CID_HOST) {
-            return .{ .vsock = .{ .cid = cid, .port = default_port } };
+        if (currentCid()) |cid| {
+            if (cid > C.VMADDR_CID_HOST) {
+                return .{ .vsock = .{ .cid = cid, .port = default_port } };
+            }
+        } else |err| {
+            std.log.warn("failed to obtain current vsock CID: {}", .{err});
         }
     } else |_| {}
 
