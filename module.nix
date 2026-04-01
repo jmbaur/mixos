@@ -371,6 +371,7 @@ in
                   #!/bin/sh
                   while true; do
                     date | logger -t silly
+                    sleep 1
                   done
                   \'\'
                 '';
