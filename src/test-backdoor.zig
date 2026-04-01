@@ -180,7 +180,7 @@ fn detectDefaultListenParams() !ListenParam {
     ) catch @compileError("invalid IPv6 address") };
 }
 
-pub fn main(args: *std.process.ArgIterator) !void {
+pub fn main(args: *std.process.ArgIterator) anyerror!void {
     var listen_param = try detectDefaultListenParams();
 
     if (try parseKernelCmdline()) |param| {

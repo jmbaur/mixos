@@ -653,7 +653,10 @@ in
 
       services = {
         test-backdoor = mkIf config.mixos.testing.enable {
-          run = getExe' pkgs.mixos "test-backdoor";
+          run = pkgs.writeScript "test-backdoor-run" ''
+            #!/bin/sh
+            exec ${getExe pkgs.mixos} test-backdoor
+          '';
         };
       };
     }

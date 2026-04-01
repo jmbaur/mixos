@@ -3,7 +3,7 @@ const Kmod = @import("./kmod.zig");
 
 const log = std.log.scoped(.mixos);
 
-pub fn main(args: *std.process.ArgIterator) !void {
+pub fn main(args: *std.process.ArgIterator) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
