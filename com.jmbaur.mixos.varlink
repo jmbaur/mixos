@@ -1,5 +1,13 @@
 interface com.jmbaur.mixos
 
-method RunCommand(command: []string) -> (exit_code: int, stdout: string, stderr: string)
+# An indication that running the command failed, either because no command was
+# provided, the command itself does not exist, or executing the command failed
+# in some other way. This error does not occur if running the command succeeds,
+# but the command itself returns with a non-zero exit code.
+error CommandFailed ()
 
-error MissingCommand()
+method RunCommand(command: []string) -> (
+  exit_code: int,
+  stdout: string,
+  stderr: string
+)

@@ -15,6 +15,7 @@ const Context = struct {
     pub const url = "http://mixos.jmbaur.com";
     @"com.jmbaur.mixos": struct {
         pub const interface = mixos_varlink;
+
         pub fn handleRunCommand(
             context: *@This(),
             parameters: mixos_varlink.RunCommand.Parameters,
@@ -23,15 +24,17 @@ const Context = struct {
             _ = context;
 
             if (parameters.command.len == 0) {
-                try request_context.serializeError(mixos_varlink.MissingCommand{});
-                return;
+                return try request_context.serializeError(mixos_varlink.CommandFailed{});
             }
 
-            const run_result = try std.process.Child.run(.{
+            const run_result = std.process.Child.run(.{
                 .allocator = request_context.getData(),
                 .argv = parameters.command,
                 .max_output_bytes = std.math.maxInt(usize),
-            });
+            }) catch |err| switch (err) {
+                error.FileNotFound, error.AccessDenied => return try request_context.serializeError(mixos_varlink.CommandFailed{}),
+                else => return err,
+            };
 
             try request_context.serializeResponse(.{
                 .exit_code = switch (run_result.term) {
