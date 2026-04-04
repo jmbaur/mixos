@@ -620,6 +620,11 @@ in
           process = mkDefault "/bin/umount -a -r";
         };
 
+        swapoff = {
+          action = "shutdown";
+          process = mkDefault "/bin/swapoff -a";
+        };
+
         syslogd = {
           action = "respawn";
           process = mkDefault "/bin/syslogd -n -D";
