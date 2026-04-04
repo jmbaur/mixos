@@ -110,6 +110,19 @@ pub fn build(b: *std.Build) void {
     libkmod.root_module.addIncludePath(kmod_dep.path("libkmod"));
     libkmod.installHeader(kmod_dep.path("libkmod/libkmod.h"), "libkmod/libkmod.h");
 
+    const kmod_log_wrapper = b.addLibrary(.{
+        .name = "kmod-log-wrapper",
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+            .strip = optimize != .Debug,
+            .link_libc = true,
+        }),
+    });
+    kmod_log_wrapper.addCSourceFile(.{
+        .file = b.path("src/kmod.c"),
+    });
+
     const mixos_rdinit_module = b.createModule(.{
         .root_source_file = b.path("src/rdinit.zig"),
         .target = target,
@@ -126,6 +139,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     mixos_module.linkLibrary(libkmod);
+    mixos_module.linkLibrary(kmod_log_wrapper);
     mixos_module.addImport("varlink", varlink_dep.module("varlink"));
     mixos_module.addImport("mixos_varlink", varlink.scanFile(b, varlink_build_dep.artifact("zig-varlink-scanner"), b.path("com.jmbaur.mixos.varlink"), "com-jmbaur-mixos.zig"));
 
@@ -194,6 +208,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     unit_tests_module.linkLibrary(libkmod);
+    unit_tests_module.linkLibrary(kmod_log_wrapper);
 
     const unit_tests = b.addTest(.{
         .root_module = unit_tests_module,

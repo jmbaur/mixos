@@ -3,10 +3,12 @@ const std = @import("std");
 const system = std.posix.system;
 
 const C = @cImport({
+    @cInclude("syslog.h");
     @cInclude("libkmod/libkmod.h");
 });
 
 const log = std.log.scoped(.mixos);
+const kmod_log = std.log.scoped(.kmod);
 
 const Kmod = @This();
 
@@ -14,8 +16,38 @@ ctx: *C.kmod_ctx,
 
 allocator: std.mem.Allocator,
 
+extern fn kmod_log_wrapper(
+    ?*anyopaque,
+    c_int,
+    [*c]const u8,
+    c_int,
+    [*c]const u8,
+    [*c]const u8,
+    [*c]C.struct___va_list_tag_1,
+) callconv(.c) void;
+
+// Since zig does not have a great story for va_args with C interoperability,
+// we provide this function as the userdata to kmod's logging infrastructure to
+// a C function that does the processing of va_args.
+fn kmod_log_unwrapped(priority: c_int, content: [*c]const u8) callconv(.c) void {
+    const log_content = std.mem.trim(u8, std.mem.span(content), &std.ascii.whitespace);
+
+    switch (priority) {
+        C.LOG_EMERG, C.LOG_ALERT, C.LOG_CRIT, C.LOG_ERR => kmod_log.err("{s}", .{log_content}),
+        C.LOG_WARNING => kmod_log.warn("{s}", .{log_content}),
+        C.LOG_NOTICE, C.LOG_INFO => kmod_log.info("{s}", .{log_content}),
+        else => kmod_log.debug("{s}", .{log_content}),
+    }
+}
+
 pub fn init(allocator: std.mem.Allocator) !Kmod {
     const kmod_ctx = C.kmod_new(null, null) orelse return error.KmodNew;
+
+    C.kmod_set_log_fn(kmod_ctx, kmod_log_wrapper, &kmod_log_unwrapped);
+
+    // Set the maximum log level so we can do all the filtering on the zig side
+    C.kmod_set_log_priority(kmod_ctx, C.LOG_DEBUG);
+
     if (C.kmod_load_resources(kmod_ctx) != 0) {
         return error.KmodLoadResources;
     }
