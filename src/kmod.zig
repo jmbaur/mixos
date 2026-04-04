@@ -71,7 +71,11 @@ pub fn modprobe(self: *Kmod, module_query: []const u8) !void {
     const module_queryz = std.mem.sliceTo(&module_query_buf, 0);
 
     var list: ?*C.kmod_list = null;
-    if (std.enums.fromInt(std.posix.E, @abs(C.kmod_module_new_from_lookup(self.ctx, module_queryz, &list)))) |err| switch (err) {
+    if (std.enums.fromInt(std.posix.E, @abs(C.kmod_module_new_from_lookup(
+        self.ctx,
+        module_queryz,
+        &list,
+    )))) |err| switch (err) {
         .SUCCESS => {},
         .NOENT, .NOSYS => return error.InvalidModuleLookup,
         .INVAL => return error.InvalidModuleAlias,
@@ -87,7 +91,10 @@ pub fn modprobe(self: *Kmod, module_query: []const u8) !void {
 
     var current_module_list: ?*C.kmod_list = module_list;
     var has_error = false;
-    while (current_module_list != null) : (current_module_list = C.kmod_list_next(module_list, current_module_list)) {
+    while (current_module_list != null) : (current_module_list = C.kmod_list_next(
+        module_list,
+        current_module_list,
+    )) {
         const module = C.kmod_module_get_module(current_module_list);
         defer {
             _ = C.kmod_module_unref(module);
