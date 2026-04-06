@@ -32,26 +32,29 @@ fn pidfd_open(pid: posix.pid_t, flags: u32) !posix.fd_t {
 }
 
 fn runChild(
-    initZ: [:0]const u8,
+    argv: [*:null]const ?[*:0]const u8,
     envp: [:null]?[*:0]u8,
     errfd: posix.fd_t,
     stdin: posix.fd_t,
     stdout: posix.fd_t,
     stderr: posix.fd_t,
+    working_directory: []const u8,
 ) noreturn {
     const err = child: {
+        posix.chdir(working_directory) catch |err| break :child err;
+
         posix.dup2(stdin, posix.STDIN_FILENO) catch |err| break :child err;
         posix.dup2(stdout, posix.STDOUT_FILENO) catch |err| break :child err;
         posix.dup2(stderr, posix.STDERR_FILENO) catch |err| break :child err;
 
-        break :child std.posix.execvpeZ(initZ, &.{initZ}, envp);
+        break :child posix.execvpeZ(argv[0].?, argv, envp);
     };
 
     const err_int = @intFromError(err);
     var err_buf: [@sizeOf(@TypeOf(err_int))]u8 = undefined;
     std.mem.writeInt(@TypeOf(err_int), &err_buf, err_int, .little);
-    _ = std.posix.write(errfd, &err_buf) catch {};
-    std.posix.exit(1);
+    _ = posix.write(errfd, &err_buf) catch {};
+    posix.exit(1);
 }
 
 // TODO(jared): remove with zig 0.16.0
@@ -167,19 +170,20 @@ fn handleTimeout(
 }
 
 pub fn run(
-    allocator: std.mem.Allocator,
-    executable: []const u8,
+    arena: std.mem.Allocator,
+    argv: []const []const u8,
     output_writer: *std.Io.Writer,
+    working_directory: []const u8,
     timeout: ?isize,
 ) !std.process.Child.Term {
     const epoll = try posix.epoll_create1(0);
     defer posix.close(epoll);
 
-    const initZ = try allocator.dupeZ(u8, executable);
-    defer allocator.free(initZ);
+    const argv_buf = try arena.allocSentinel(?[*:0]const u8, argv.len, null);
+    for (argv, 0..) |arg, i| argv_buf[i] = (try arena.dupeZ(u8, arg)).ptr;
 
     const envp = try std.process.createEnvironFromExisting(
-        allocator,
+        arena,
         @ptrCast(std.os.environ.ptr),
         .{},
     );
@@ -187,27 +191,28 @@ pub fn run(
     const dev_null = try std.fs.cwd().openFile("/dev/null", .{});
     defer dev_null.close();
 
-    const output_pipe = try std.posix.pipe();
+    const output_pipe = try posix.pipe();
     defer {
-        std.posix.close(output_pipe[0]);
+        posix.close(output_pipe[0]);
     }
-    const err_pipe = try std.posix.pipe();
+    const err_pipe = try posix.pipe();
     defer {
-        std.posix.close(err_pipe[0]);
-        std.posix.close(err_pipe[1]);
+        posix.close(err_pipe[0]);
+        posix.close(err_pipe[1]);
     }
 
     const timerfd = try posix.timerfd_create(.BOOTTIME, .{ .CLOEXEC = true });
     defer posix.close(timerfd);
 
-    switch (try std.posix.fork()) {
+    switch (try posix.fork()) {
         0 => runChild(
-            initZ,
+            argv_buf,
             envp,
             err_pipe[1],
             dev_null.handle,
             output_pipe[1],
             output_pipe[1],
+            working_directory,
         ),
         else => |pid| {
             const pidfd = try pidfd_open(pid, 0);
@@ -287,8 +292,8 @@ pub fn run(
                     else => return err,
                 }) |t| {
                     if (term == null) {
-                        std.posix.close(output_pipe[1]);
-                        std.posix.close(pidfd);
+                        posix.close(output_pipe[1]);
+                        posix.close(pidfd);
                         term = t;
                     }
                 }

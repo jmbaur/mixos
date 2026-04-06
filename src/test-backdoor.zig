@@ -1,6 +1,7 @@
 const system = std.os.linux;
 const mixos_varlink = @import("mixos_varlink");
 const posix = std.posix;
+const process = @import("./process.zig");
 const std = @import("std");
 const varlink = @import("varlink");
 const C = @cImport({
@@ -28,24 +29,24 @@ const Context = struct {
                 return try request_context.serializeError(mixos_varlink.CommandFailed{});
             }
 
-            const run_result = std.process.Child.run(.{
-                .allocator = request_context.getData(),
-                .argv = parameters.command,
-                .max_output_bytes = std.math.maxInt(usize),
-            }) catch |err| switch (err) {
+            const arena: std.mem.Allocator = request_context.getData();
+            var output: std.Io.Writer.Allocating = .init(arena);
+            defer output.deinit();
+
+            const term = process.run(arena, parameters.command, &output.writer, "/", parameters.timeout) catch |err| switch (err) {
                 error.FileNotFound, error.AccessDenied => return try request_context.serializeError(mixos_varlink.CommandFailed{}),
+                error.Timeout => return try request_context.serializeError(mixos_varlink.Timeout{}),
                 else => return err,
             };
 
             try request_context.serializeResponse(.{
-                .exit_code = switch (run_result.term) {
+                .exit_code = switch (term) {
                     .Exited => |exited| @as(u32, exited),
                     .Signal => |signal| signal,
                     .Stopped => |stopped| stopped,
                     .Unknown => |unknown| unknown,
                 },
-                .stderr = run_result.stderr,
-                .stdout = run_result.stdout,
+                .output = output.written(),
             });
         }
     } = .{},
@@ -57,7 +58,7 @@ const Connection = varlink.server.Connection(
 );
 
 fn handleRequest(
-    allocator: std.mem.Allocator,
+    arena: std.mem.Allocator,
     connection: *Connection,
     reader: anytype,
     context: *Context,
@@ -65,7 +66,7 @@ fn handleRequest(
     const request = try readMessage(reader);
     try connection.handleRequest(
         request,
-        allocator,
+        arena,
         context,
     );
 }
@@ -76,7 +77,7 @@ fn readMessage(reader: *std.Io.Reader) ![]u8 {
     return res;
 }
 
-fn handleConnection(allocator: std.mem.Allocator, stream: *std.net.Stream) !void {
+fn handleConnection(arena: std.mem.Allocator, stream: *std.net.Stream) !void {
     var read_buffer: [1024]u8 = undefined;
     var reader = stream.reader(&read_buffer);
     var context: Context = .{};
@@ -85,12 +86,12 @@ fn handleConnection(allocator: std.mem.Allocator, stream: *std.net.Stream) !void
     var writer = stream.writer(&write_buffer);
     var varlink_connection: Connection = .{
         .response_writer = &writer.interface,
-        .data = allocator,
+        .data = arena,
     };
 
     while (true) {
         handleRequest(
-            allocator,
+            arena,
             &varlink_connection,
             reader.interface(),
             &context,

@@ -110,6 +110,5 @@ def cli():
 
     with Machine(args.address) as machine:
         response = machine.RunCommand(args.command)
-        print("\nstdout:\n{}".format(response["stdout"].strip()))
-        print("\nstderr:\n{}".format(response["stderr"].strip()))
+        print(response["output"].strip())
         exit(response["exit_code"])
