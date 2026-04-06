@@ -1,5 +1,5 @@
 const std = @import("std");
-const system = std.posix.system;
+const system = std.os.linux;
 
 const log = std.log.scoped(.mixos);
 
@@ -15,7 +15,7 @@ pub fn mount(
     data: usize,
     //options: []const []const u8,
 ) !void {
-    switch (system.E.init(std.os.linux.mount(special, dir, fstype, flags, data))) {
+    switch (system.E.init(system.mount(special, dir, fstype, flags, data))) {
         .SUCCESS => {},
         else => |err| {
             log.err("failed to mount \"{s}\" on \"{s}\": {s}", .{ special, dir, @tagName(err) });

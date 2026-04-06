@@ -560,7 +560,6 @@ in
 
       init = {
         mixos-startup = {
-          tty = "console"; # Used so that state init output can be viewed
           action = "sysinit";
           process = toString [
             (getExe pkgs.mixos)
@@ -668,11 +667,13 @@ in
     {
       boot.requiredKernelConfig = [
         "BLK_DEV_LOOP"
+        "EPOLL"
         "EROFS_FS"
         "EROFS_FS_ZIP_LZMA"
         "FUTEX"
         "OVERLAY_FS"
         "RD_XZ"
+        "TIMERFD"
         "TMPFS"
       ]
       ++ optionals (config.boot.firmware != [ ]) [

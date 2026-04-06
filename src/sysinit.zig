@@ -1,8 +1,8 @@
-const std = @import("std");
-const system = std.posix.system;
 const Kmod = @import("./kmod.zig");
 const fs = @import("./fs.zig");
-const MS = std.os.linux.MS;
+const process = @import("./process.zig");
+const std = @import("std");
+const system = std.os.linux;
 
 const log = std.log.scoped(.mixos);
 
@@ -28,9 +28,16 @@ const StateConfig = struct {
     /// Path to program to run to initialize state storage
     init: ?[]const u8,
 
+    /// The filesystem type
     type: []const u8,
+
+    /// The source to mount (e.g. block device)
     what: []const u8,
+
+    /// The target mountpoint
     where: []const u8,
+
+    /// Mount options
     options: []const []const u8,
 };
 
@@ -47,7 +54,7 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
             "devpts",
             "/dev/pts",
             "devpts",
-            MS.NOEXEC | MS.NOSUID,
+            system.MS.NOEXEC | system.MS.NOSUID,
             0,
         ) catch {};
     }
@@ -57,7 +64,7 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
             "configfs",
             "/sys/kernel/config",
             "configfs",
-            MS.NOEXEC | MS.NOSUID | MS.NODEV,
+            system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV,
             0,
         ) catch {};
     }
@@ -67,7 +74,7 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
             "debugfs",
             "/sys/kernel/debug",
             "debugfs",
-            MS.NOEXEC | MS.NOSUID | MS.NODEV,
+            system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV,
             0,
         ) catch {};
     }
@@ -77,7 +84,7 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
             "tracefs",
             "/sys/kernel/tracing",
             "tracefs",
-            MS.NOSUID | MS.NODEV | MS.NOEXEC | MS.RELATIME,
+            system.MS.NOSUID | system.MS.NODEV | system.MS.NOEXEC | system.MS.RELATIME,
             0,
         ) catch {};
     }
@@ -88,7 +95,7 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
             "securityfs",
             "/sys/kernel/security",
             "securityfs",
-            MS.NOSUID | MS.NODEV | MS.NOEXEC | MS.RELATIME,
+            system.MS.NOSUID | system.MS.NODEV | system.MS.NOEXEC | system.MS.RELATIME,
             0,
         ) catch {};
     }
@@ -98,49 +105,49 @@ fn mountFilesystems(kernel: *const KernelConfig) void {
             "cgroup2",
             "/sys/fs/cgroup",
             "cgroup2",
-            MS.NOEXEC | MS.RELATIME | MS.NOSUID | MS.NODEV,
+            system.MS.NOEXEC | system.MS.RELATIME | system.MS.NOSUID | system.MS.NODEV,
             @intFromPtr("nsdelegate,memory_recursiveprot"),
         ) catch {};
     }
 
     if (kernel.SHMEM) {
         std.fs.cwd().makeDir("/dev/shm") catch {};
-        fs.mount("tmpfs", "/dev/shm", "tmpfs", MS.NOSUID | MS.NODEV, 0) catch {};
+        fs.mount("tmpfs", "/dev/shm", "tmpfs", system.MS.NOSUID | system.MS.NODEV, 0) catch {};
     }
 
-    fs.mount("tmpfs", "/tmp", "tmpfs", MS.NOSUID | MS.NODEV, 0) catch {};
+    fs.mount("tmpfs", "/tmp", "tmpfs", system.MS.NOSUID | system.MS.NODEV, 0) catch {};
 }
 
 const mount_options = std.StaticStringMap(u32).initComptime(.{
-    .{ "ro", MS.RDONLY },
-    .{ "relatime", MS.RELATIME },
-    .{ "nosuid", MS.NOSUID },
-    .{ "nodev", MS.NODEV },
-    .{ "noexec", MS.NOEXEC },
-    .{ "remount", MS.REMOUNT },
-    .{ "noatime", MS.NOATIME },
-    .{ "bind", MS.BIND },
-    .{ "rbind", MS.BIND | MS.REC },
-    .{ "nodiratime", MS.NODIRATIME },
-    .{ "sync", MS.SYNCHRONOUS },
-    .{ "dirsync", MS.DIRSYNC },
-    .{ "lazytime", MS.LAZYTIME },
-    .{ "strictatime", MS.STRICTATIME },
-    .{ "mand", MS.MANDLOCK },
-    .{ "private", MS.PRIVATE },
-    .{ "rprivate", MS.PRIVATE | MS.REC },
-    .{ "slave", MS.SLAVE },
-    .{ "rslave", MS.SLAVE | MS.REC },
-    .{ "move", MS.MOVE },
-    .{ "shared", MS.SHARED },
-    .{ "rshared", MS.SHARED | MS.REC },
-    .{ "unbindable", MS.UNBINDABLE },
-    .{ "runbindable", MS.UNBINDABLE | MS.REC },
+    .{ "ro", system.MS.RDONLY },
+    .{ "relatime", system.MS.RELATIME },
+    .{ "nosuid", system.MS.NOSUID },
+    .{ "nodev", system.MS.NODEV },
+    .{ "noexec", system.MS.NOEXEC },
+    .{ "remount", system.MS.REMOUNT },
+    .{ "noatime", system.MS.NOATIME },
+    .{ "bind", system.MS.BIND },
+    .{ "rbind", system.MS.BIND | system.MS.REC },
+    .{ "nodiratime", system.MS.NODIRATIME },
+    .{ "sync", system.MS.SYNCHRONOUS },
+    .{ "dirsync", system.MS.DIRSYNC },
+    .{ "lazytime", system.MS.LAZYTIME },
+    .{ "strictatime", system.MS.STRICTATIME },
+    .{ "mand", system.MS.MANDLOCK },
+    .{ "private", system.MS.PRIVATE },
+    .{ "rprivate", system.MS.PRIVATE | system.MS.REC },
+    .{ "slave", system.MS.SLAVE },
+    .{ "rslave", system.MS.SLAVE | system.MS.REC },
+    .{ "move", system.MS.MOVE },
+    .{ "shared", system.MS.SHARED },
+    .{ "rshared", system.MS.SHARED | system.MS.REC },
+    .{ "unbindable", system.MS.UNBINDABLE },
+    .{ "runbindable", system.MS.UNBINDABLE | system.MS.REC },
     .{ "defaults", 0 },
 });
 
 fn parseStringMountOptions(options: []const []const u8, data_writer: *std.Io.Writer) !u32 {
-    var flags: u32 = MS.SILENT;
+    var flags: u32 = system.MS.SILENT;
 
     for (options) |option| {
         if (mount_options.get(option)) |bitmask| {
@@ -164,7 +171,7 @@ test "parseStringMountOptions" {
     {
         const flags = parseStringMountOptions(&.{ "noatime", "compress=zstd" }, &data_writer.writer) catch unreachable;
         try std.testing.expectEqualStrings("compress=zstd", data_writer.written());
-        try std.testing.expectEqual(MS.SILENT | MS.NOATIME, flags);
+        try std.testing.expectEqual(system.MS.SILENT | system.MS.NOATIME, flags);
     }
 
     data_writer.clearRetainingCapacity();
@@ -172,20 +179,100 @@ test "parseStringMountOptions" {
     {
         const flags = parseStringMountOptions(&.{ "ro", "noatime", "compress=zstd", "defaults" }, &data_writer.writer) catch unreachable;
         try std.testing.expectEqualStrings("compress=zstd", data_writer.written());
-        try std.testing.expectEqual(MS.SILENT | MS.NOATIME | MS.RDONLY, flags);
+        try std.testing.expectEqual(system.MS.SILENT | system.MS.NOATIME | system.MS.RDONLY, flags);
     }
 }
+
+const IndentedWriter = struct {
+    start: bool = true,
+    indent_size: usize,
+    inner: std.Io.Writer.Allocating,
+    writer: std.Io.Writer,
+
+    fn init(allocator: std.mem.Allocator, indent_size: usize) @This() {
+        return .{
+            .indent_size = indent_size,
+            .inner = .init(allocator),
+            .writer = .{
+                .buffer = &.{},
+                .vtable = &vtable,
+            },
+        };
+    }
+
+    const vtable: std.Io.Writer.VTable = .{
+        .drain = &drain,
+        .flush = std.Io.Writer.noopFlush,
+        .rebase = &rebase,
+    };
+
+    fn rebase(w: *std.Io.Writer, preserve: usize, capacity: usize) std.Io.Writer.Error!void {
+        const self: *@This() = @fieldParentPtr("writer", w);
+        return self.inner.writer.rebase(preserve, capacity);
+    }
+
+    fn drain(w: *std.Io.Writer, data: []const []const u8, len: usize) std.Io.Writer.Error!usize {
+        _ = len;
+
+        const self: *@This() = @fieldParentPtr("writer", w);
+
+        var n: usize = 0;
+        for (data) |bytes| {
+            if (self.start) {
+                try self.inner.writer.splatByteAll(' ', self.indent_size);
+                n += self.indent_size;
+                self.start = false;
+            }
+
+            if (std.mem.indexOfScalar(u8, bytes, '\n')) |_| {
+                var split = std.mem.splitScalar(u8, bytes, '\n');
+                while (split.next()) |line| {
+                    try self.inner.writer.writeAll(line);
+                    n += line.len;
+                    try self.inner.writer.writeByte('\n');
+                    n += 1;
+                    try self.inner.writer.splatByteAll(' ', self.indent_size);
+                    n += self.indent_size;
+                }
+            } else {
+                try self.inner.writer.writeAll(bytes);
+                n += bytes.len;
+            }
+        }
+
+        return n;
+    }
+
+    fn deinit(self: *@This()) void {
+        self.inner.deinit();
+    }
+
+    fn written(self: *@This()) []u8 {
+        return self.inner.written();
+    }
+};
 
 fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !void {
     b: {
         if (state.init) |init| {
-            var child = std.process.Child.init(&.{init}, allocator);
+            var output: IndentedWriter = .init(allocator, 2);
+            defer output.deinit();
 
-            const term = try child.spawnAndWait();
+            const term = process.run(allocator, init, &output.writer, null) catch |err| {
+                log.err("failed to run state initialization: {}", .{err});
+                return error.StateInit;
+            };
+
+            log.info("state initialization:\n{s}", .{std.mem.trimEnd(
+                u8,
+                output.written(),
+                &std.ascii.whitespace,
+            )});
+
             switch (term) {
-                .Exited => |code| if (code == 0) {
-                    log.debug("initialized storage backing /state", .{});
-                    break :b;
+                .Exited => |exit_code| switch (exit_code) {
+                    0 => break :b,
+                    else => {},
                 },
                 else => {},
             }
@@ -209,12 +296,12 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
 
     const flags = try parseStringMountOptions(state.options, &data.writer);
 
-    log.debug("mounting state what={s} where={s} type={s} flags={} data={s}", .{
+    log.debug("mounting state what={s} where={s} type={s} flags=0x{x} data={s}", .{
         what,
         where,
         @"type",
         flags,
-        data.written(),
+        if (data.written().len > 0) data.written() else "<none>",
     });
 
     const state_mount_data = try allocator.dupeZ(u8, data.written());
@@ -241,7 +328,7 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
                 log.err("failed to create /{s} mount source: {}", .{ dir_name, err });
                 break :b;
             };
-            fs.mount(dir_relative_to_state, dir_relative_to_root, "", MS.BIND, 0) catch {
+            fs.mount(dir_relative_to_state, dir_relative_to_root, "", system.MS.BIND, 0) catch {
                 break :b;
             };
         }
@@ -295,7 +382,7 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
             "overlay",
             "/etc",
             "overlay",
-            MS.RELATIME,
+            system.MS.RELATIME,
             @intFromPtr(overlay_mount_data.ptr),
         ) catch {
             break :b;
@@ -315,7 +402,7 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
 }
 
 fn sethostname(hostname: []const u8) usize {
-    return std.os.linux.syscall2(.sethostname, @intFromPtr(hostname.ptr), hostname.len);
+    return system.syscall2(.sethostname, @intFromPtr(hostname.ptr), hostname.len);
 }
 
 fn extractHostname(etc_hostname_contents: []const u8) ?[]const u8 {
@@ -380,11 +467,11 @@ fn setupNetworking(kernel: *const KernelConfig) !void {
     defer std.posix.close(fd);
 
     {
-        var ifr = std.mem.zeroes(std.posix.system.ifreq);
+        var ifr = std.mem.zeroes(system.ifreq);
         std.mem.copyForwards(u8, &ifr.ifrn.name, "lo");
-        switch (system.E.init(std.os.linux.ioctl(
+        switch (system.E.init(system.ioctl(
             fd,
-            std.os.linux.SIOCGIFFLAGS,
+            system.SIOCGIFFLAGS,
             @intFromPtr(&ifr),
         ))) {
             .SUCCESS => {},
@@ -393,9 +480,9 @@ fn setupNetworking(kernel: *const KernelConfig) !void {
 
         ifr.ifru.flags.UP = true;
 
-        switch (system.E.init(std.os.linux.ioctl(
+        switch (system.E.init(system.ioctl(
             fd,
-            std.os.linux.SIOCSIFFLAGS,
+            system.SIOCSIFFLAGS,
             @intFromPtr(&ifr),
         ))) {
             .SUCCESS => {},

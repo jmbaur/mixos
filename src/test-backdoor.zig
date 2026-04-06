@@ -1,7 +1,8 @@
-const std = @import("std");
-const varlink = @import("varlink");
+const system = std.os.linux;
 const mixos_varlink = @import("mixos_varlink");
 const posix = std.posix;
+const std = @import("std");
+const varlink = @import("varlink");
 const C = @cImport({
     @cInclude("sys/ioctl.h");
     @cInclude("sys/socket.h");
@@ -106,7 +107,7 @@ fn currentCid() !u32 {
     defer vsock.close();
 
     var cid: u32 = undefined;
-    if (0 != posix.system.ioctl(vsock.handle, C.IOCTL_VM_SOCKETS_GET_LOCAL_CID, &cid)) {
+    if (0 != system.ioctl(vsock.handle, C.IOCTL_VM_SOCKETS_GET_LOCAL_CID, @intFromPtr(&cid))) {
         return error.UnknownLocalCid;
     }
     return cid;

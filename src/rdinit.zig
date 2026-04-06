@@ -1,7 +1,7 @@
-const std = @import("std");
-const system = std.posix.system;
 const fs = @import("./fs.zig");
 const kmsg = @import("./kmsg.zig");
+const std = @import("std");
+const system = std.os.linux;
 
 const log = std.log.scoped(.mixos);
 
@@ -56,7 +56,11 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
     const cmdline_file = try std.fs.cwd().openFile("/proc/cmdline", .{});
     defer cmdline_file.close();
 
-    const cmdline = std.mem.trimRight(u8, try cmdline_file.readToEndAlloc(allocator, std.math.maxInt(usize)), &std.ascii.whitespace);
+    const cmdline = std.mem.trimRight(
+        u8,
+        try cmdline_file.readToEndAlloc(allocator, std.math.maxInt(usize)),
+        &std.ascii.whitespace,
+    );
     log.debug("using kernel cmdline \"{s}\"", .{cmdline});
 
     const init = find_cmdline(cmdline, "init") orelse "/init";
@@ -93,7 +97,13 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
         },
     }
 
-    try fs.mount(loop_device_path, "/sysroot", rootfstype, system.MS.RDONLY | system.MS.NODEV | system.MS.NOSUID, 0);
+    try fs.mount(
+        loop_device_path,
+        "/sysroot",
+        rootfstype,
+        system.MS.RDONLY | system.MS.NODEV | system.MS.NOSUID,
+        0,
+    );
 
     var passthru_dir = std.fs.cwd().openDir("/passthru", .{});
     if (passthru_dir) |*dir| {
@@ -142,6 +152,10 @@ fn switch_root(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 pub fn main() noreturn {
+    if (system.getpid() != 1) {
+        std.debug.panic("not running as PID1, refusing to continue", .{});
+    }
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 
@@ -155,6 +169,8 @@ pub fn main() noreturn {
         log.warn("failed to reset arena", .{});
     }
 
-    const err = std.process.execv(allocator, &.{init});
-    std.debug.panic("execv /init failed: {}", .{err});
+    std.debug.panic(
+        "execv /init failed: {}",
+        .{std.process.execv(allocator, &.{init})},
+    );
 }

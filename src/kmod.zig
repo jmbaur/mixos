@@ -1,6 +1,4 @@
-const builtin = @import("builtin");
 const std = @import("std");
-const system = std.posix.system;
 
 const C = @cImport({
     @cInclude("syslog.h");

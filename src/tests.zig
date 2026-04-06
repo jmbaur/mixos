@@ -4,6 +4,7 @@ test {
     _ = @import("./kmsg.zig");
     _ = @import("./mixos.zig");
     _ = @import("./modprobe.zig");
+    _ = @import("./process.zig");
     _ = @import("./rdinit.zig");
     _ = @import("./sysinit.zig");
     _ = @import("./syslog.zig");
