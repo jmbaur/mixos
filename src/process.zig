@@ -309,6 +309,8 @@ test "run" {
     // timeout
     {
         var output: std.Io.Writer.Discarding = .init(&.{});
+
+        // TODO(jared): skip test if any kernel features we use here aren't available (EPOLL/TIMERFD/etc)
         try std.testing.expectError(error.Timeout, run(
             arena.allocator(),
             &.{ "sleep", "2" },
