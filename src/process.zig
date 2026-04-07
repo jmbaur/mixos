@@ -1,3 +1,4 @@
+const builtin = @import("builtin");
 const posix = std.posix;
 const std = @import("std");
 const system = std.os.linux;
@@ -283,12 +284,7 @@ pub fn run(
                     &output_buffer,
                     output_writer,
                 ) catch |err| switch (err) {
-                    error.EndOfStream => {
-                        if (term) |t| {
-                            return t;
-                        }
-                        return err;
-                    },
+                    error.EndOfStream => return if (term) |t| t else err,
                     else => return err,
                 }) |t| {
                     if (term == null) {
@@ -299,5 +295,32 @@ pub fn run(
                 }
             }
         },
+    }
+}
+
+test "run" {
+    if (builtin.os.tag != .linux) {
+        return error.SkipZigTest;
+    }
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    // timeout
+    {
+        var output: std.Io.Writer.Discarding = .init(&.{});
+        try std.testing.expectError(error.Timeout, run(
+            arena.allocator(),
+            &.{ "sleep", "2" },
+            &output.writer,
+            "/",
+            1,
+        ) catch |err| switch (err) {
+            // Since this test is slightly impure in that it runs some
+            // external command, we should allow for locked-down/sandboxed
+            // environments that do not have the capability to run this test.
+            error.FileNotFound => return error.SkipZigTest,
+            else => err,
+        });
     }
 }
