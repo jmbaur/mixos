@@ -258,7 +258,10 @@ fn initAndSetupState(allocator: std.mem.Allocator, state: *const StateConfig) !v
             var output: IndentedWriter = .init(allocator, 2);
             defer output.deinit();
 
-            const term = process.run(allocator, &.{init}, &output.writer, "/", null) catch |err| {
+            const term = process.run(allocator, &.{init}, .{
+                .stdout_writer = &output.writer,
+                .stderr_writer = &output.writer,
+            }) catch |err| {
                 log.err("failed to run state initialization: {}", .{err});
                 return error.StateInit;
             };

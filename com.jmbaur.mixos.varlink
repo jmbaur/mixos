@@ -9,5 +9,9 @@ error CommandFailed ()
 # The varlink method did not complete within the given time.
 error Timeout ()
 
-# Run a command on the machine, optionally with a timeout.
-method RunCommand(command: []string, timeout: ?int) -> (exit_code: int, output: string)
+# Run a command on the machine, optionally with a timeout (in seconds).
+method RunCommand(command: []string, timeout: ?int) -> (
+  exit_code: int,
+  stdout: string,
+  stderr: string
+)

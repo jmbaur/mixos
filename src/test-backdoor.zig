@@ -10,6 +10,8 @@ const C = @cImport({
     @cInclude("linux/vm_sockets.h");
 });
 
+const log = std.log.scoped(.mixos);
+
 const Context = struct {
     pub const vendor = "jmbaur";
     pub const product = "mixos";
@@ -30,10 +32,17 @@ const Context = struct {
             }
 
             const arena: std.mem.Allocator = request_context.getData();
-            var output: std.Io.Writer.Allocating = .init(arena);
-            defer output.deinit();
+            var stdout: std.Io.Writer.Allocating = .init(arena);
+            defer stdout.deinit();
 
-            const term = process.run(arena, parameters.command, &output.writer, "/", parameters.timeout) catch |err| switch (err) {
+            var stderr: std.Io.Writer.Allocating = .init(arena);
+            defer stderr.deinit();
+
+            const term = process.run(arena, parameters.command, .{
+                .stdout_writer = &stdout.writer,
+                .stderr_writer = &stderr.writer,
+                .timeout = parameters.timeout,
+            }) catch |err| switch (err) {
                 error.FileNotFound, error.AccessDenied => return try request_context.serializeError(mixos_varlink.CommandFailed{}),
                 error.Timeout => return try request_context.serializeError(mixos_varlink.Timeout{}),
                 else => return err,
@@ -46,7 +55,8 @@ const Context = struct {
                     .Stopped => |stopped| stopped,
                     .Unknown => |unknown| unknown,
                 },
-                .output = output.written(),
+                .stdout = stdout.written(),
+                .stderr = stderr.written(),
             });
         }
     } = .{},
@@ -157,7 +167,7 @@ fn parseKernelCmdline() !?ListenParam {
 
         if (std.mem.eql(u8, entry_split.next() orelse continue, "mixos.test_backdoor")) {
             return ListenParam.parse(entry_split.next() orelse continue) catch |err| {
-                std.log.warn("failed to parse mixos.test_backdoor= kernel param: {}", .{err});
+                log.warn("failed to parse mixos.test_backdoor= kernel param: {}", .{err});
                 continue;
             };
         }
@@ -175,7 +185,7 @@ fn detectDefaultListenParams() !ListenParam {
                 return .{ .vsock = .{ .cid = cid, .port = default_port } };
             }
         } else |err| {
-            std.log.warn("failed to obtain current vsock CID: {}", .{err});
+            log.warn("failed to obtain current vsock CID: {}", .{err});
         }
     } else |_| {}
 
@@ -248,7 +258,7 @@ pub fn main(args: *std.process.ArgIterator) anyerror!void {
 
     try std.posix.listen(sockfd, 1);
 
-    std.log.info("server listening on {f}", .{listen_param});
+    log.info("server listening on {f}", .{listen_param});
 
     while (true) {
         defer {
@@ -265,10 +275,10 @@ pub fn main(args: *std.process.ArgIterator) anyerror!void {
         ) };
         defer stream.close();
 
-        std.log.debug("connection started", .{});
+        log.debug("connection started", .{});
         handleConnection(arena.allocator(), &stream) catch |err| {
-            std.log.err("connection handling failed: {}", .{err});
+            log.err("connection handling failed: {}", .{err});
         };
-        std.log.debug("connection ended", .{});
+        log.debug("connection ended", .{});
     }
 }

@@ -2,6 +2,9 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const std = @import("std");
 const system = std.os.linux;
+const C = @cImport({
+    @cInclude("sys/epoll.h");
+});
 
 const log = std.log.scoped(.mixos);
 
@@ -34,12 +37,12 @@ fn pidfd_open(pid: posix.pid_t, flags: u32) !posix.fd_t {
 
 fn runChild(
     argv: [*:null]const ?[*:0]const u8,
+    working_directory: []const u8,
     envp: [:null]?[*:0]u8,
     errfd: posix.fd_t,
     stdin: posix.fd_t,
     stdout: posix.fd_t,
     stderr: posix.fd_t,
-    working_directory: []const u8,
 ) noreturn {
     const err = child: {
         posix.chdir(working_directory) catch |err| break :child err;
@@ -69,76 +72,103 @@ const CLD = enum(i32) {
     _,
 };
 
-fn handlePid(
-    pidfd: posix.fd_t,
-    timerfd: posix.fd_t,
-    errfd: posix.fd_t,
-    outputfd: posix.fd_t,
-    output_buffer: []u8,
-    output_writer: *std.Io.Writer,
-) anyerror!?std.process.Child.Term {
-    _ = errfd;
-    _ = timerfd;
-    _ = outputfd;
-    _ = output_buffer;
-    _ = output_writer;
-
+fn handlePid(args: CallbackArgs) anyerror!?std.process.Child.Term {
     var siginfo: system.siginfo_t = undefined;
 
-    switch (system.E.init(system.waitid(.PIDFD, pidfd, &siginfo, system.W.EXITED))) {
-        .SUCCESS => {},
-        .CHILD => return error.NoChildProcess,
-        .INTR => return null,
-        .INVAL => return error.InvalidArguments,
-        else => |err| return posix.unexpectedErrno(err),
+    while (true) {
+        switch (system.E.init(system.waitid(.PIDFD, args.pidfd, &siginfo, system.W.EXITED))) {
+            .SUCCESS => {},
+            .CHILD => return error.NoChildProcess,
+            .INTR => continue,
+            .INVAL => return error.InvalidArguments,
+            else => |err| return posix.unexpectedErrno(err),
+        }
+        break;
+    }
+
+    try posix.epoll_ctl(args.epoll, system.EPOLL.CTL_DEL, args.pidfd, null);
+
+    args.state.process_complete = true;
+
+    // We can close the stdout/stderr pipes on the writer's end, which will
+    // cause EPOLLHUP, thus allowing us to capture the rest of the process'
+    // output.
+    posix.close(args.stdout_pipe[1]);
+    if (args.stderr_pipe) |stderr_pipe| {
+        posix.close(stderr_pipe[1]);
     }
 
     const status: u32 = @bitCast(siginfo.fields.common.second.sigchld.status);
     const code: CLD = @enumFromInt(siginfo.code);
-    return switch (code) {
+    const term: std.process.Child.Term = switch (code) {
         .EXITED => .{ .Exited = @truncate(status) },
         .KILLED, .DUMPED => .{ .Signal = status },
         .TRAPPED, .STOPPED => .{ .Stopped = status },
         _, .CONTINUED => .{ .Unknown = status },
     };
+
+    log.debug("process ended with term {}", .{term});
+
+    return term;
 }
 
-fn handleError(
-    pidfd: posix.fd_t,
-    timerfd: posix.fd_t,
-    errfd: posix.fd_t,
-    outputfd: posix.fd_t,
-    output_buffer: []u8,
-    output_writer: *std.Io.Writer,
-) anyerror!?std.process.Child.Term {
-    _ = pidfd;
-    _ = timerfd;
-    _ = outputfd;
-    _ = output_buffer;
-    _ = output_writer;
-
+fn handleError(args: CallbackArgs) anyerror!?std.process.Child.Term {
     const T = std.meta.Int(.unsigned, @bitSizeOf(anyerror));
 
     var err_buf: [@sizeOf(T)]u8 = undefined;
-    _ = try posix.read(errfd, &err_buf);
+    _ = try posix.read(args.errfd, &err_buf);
 
     const err_int = std.mem.readInt(T, &err_buf, .little);
     const err = @errorFromInt(err_int);
+
+    // The process never ran, so we mark everything as complete.
+    args.state.* = .{
+        .process_complete = true,
+        .stdout_done = true,
+        .stderr_done = true,
+    };
+
     return err;
 }
 
+fn handleStdout(args: CallbackArgs) anyerror!?std.process.Child.Term {
+    handleOutput(args.stdout_pipe[0], args.output_buffer, args.stdout_writer) catch |err| switch (err) {
+        error.EndOfStream => {
+            try posix.epoll_ctl(args.epoll, system.EPOLL.CTL_DEL, args.stdout_pipe[0], null);
+            args.state.stdout_done = true;
+            return null;
+        },
+        else => return err,
+    };
+
+    return null;
+}
+
+fn handleStderr(args: CallbackArgs) anyerror!?std.process.Child.Term {
+    std.debug.assert(args.stderr_pipe != null);
+    const stderr_pipe = args.stderr_pipe.?;
+
+    handleOutput(
+        stderr_pipe[0],
+        args.output_buffer,
+        args.stderr_writer,
+    ) catch |err| switch (err) {
+        error.EndOfStream => {
+            try posix.epoll_ctl(args.epoll, system.EPOLL.CTL_DEL, stderr_pipe[0], null);
+            args.state.stderr_done = true;
+            return null;
+        },
+        else => return err,
+    };
+
+    return null;
+}
+
 fn handleOutput(
-    pidfd: posix.fd_t,
-    timerfd: posix.fd_t,
-    errfd: posix.fd_t,
     outputfd: posix.fd_t,
     output_buffer: []u8,
     output_writer: *std.Io.Writer,
-) anyerror!?std.process.Child.Term {
-    _ = pidfd;
-    _ = timerfd;
-    _ = errfd;
-
+) !void {
     const n = try posix.read(outputfd, output_buffer[0..]);
     if (n == 0) {
         return error.EndOfStream;
@@ -146,38 +176,66 @@ fn handleOutput(
 
     try output_writer.writeAll(output_buffer[0..n]);
     try output_writer.flush();
+}
+
+fn pidfd_send_signal(pidfd: posix.fd_t, signal: i32) !void {
+    switch (system.E.init(system.pidfd_send_signal(pidfd, signal, null, 0))) {
+        .SUCCESS => {},
+        .PERM => return error.PermissionDenied,
+        .BADF, .INVAL => return error.InvalidArguments,
+        .SRCH => return error.ProcessNotFound,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+fn handleTimer(args: CallbackArgs) anyerror!?std.process.Child.Term {
+    // Consume the timer event
+    var elapsed: u64 = 0;
+    _ = try posix.read(args.timerfd, std.mem.asBytes(&elapsed));
+
+    try posix.epoll_ctl(args.epoll, system.EPOLL.CTL_DEL, args.timerfd, null);
+
+    try pidfd_send_signal(args.pidfd, posix.SIG.TERM);
+
+    args.state.process_timeout = true;
+
+    log.debug("process timeout", .{});
 
     return null;
 }
 
-fn handleTimeout(
+const CallbackState = struct {
+    process_complete: bool = false,
+    process_timeout: bool = false,
+    stdout_done: bool = false,
+    stderr_done: bool = false,
+};
+
+const CallbackArgs = struct {
+    events: u32,
+    epoll: posix.fd_t,
     pidfd: posix.fd_t,
     timerfd: posix.fd_t,
     errfd: posix.fd_t,
-    outputfd: posix.fd_t,
+    stdout_pipe: [2]posix.fd_t,
+    stderr_pipe: ?[2]posix.fd_t,
     output_buffer: []u8,
-    output_writer: *std.Io.Writer,
-) anyerror!?std.process.Child.Term {
-    _ = pidfd;
-    _ = errfd;
-    _ = outputfd;
-    _ = output_buffer;
-    _ = output_writer;
-
-    var elapsed: u64 = 0;
-    _ = try posix.read(timerfd, std.mem.asBytes(&elapsed));
-
-    return error.Timeout;
-}
+    stdout_writer: *std.Io.Writer,
+    stderr_writer: *std.Io.Writer,
+    state: *CallbackState,
+};
 
 pub fn run(
     arena: std.mem.Allocator,
     argv: []const []const u8,
-    output_writer: *std.Io.Writer,
-    working_directory: []const u8,
-    timeout: ?isize,
-) !std.process.Child.Term {
-    const epoll = try posix.epoll_create1(0);
+    opts: struct {
+        stdout_writer: *std.Io.Writer,
+        stderr_writer: *std.Io.Writer,
+        working_directory: []const u8 = "/",
+        timeout: ?i64 = null,
+    },
+) anyerror!std.process.Child.Term {
+    const epoll = try posix.epoll_create1(C.EPOLL_CLOEXEC);
     defer posix.close(epoll);
 
     const argv_buf = try arena.allocSentinel(?[*:0]const u8, argv.len, null);
@@ -192,10 +250,18 @@ pub fn run(
     const dev_null = try std.fs.cwd().openFile("/dev/null", .{});
     defer dev_null.close();
 
-    const output_pipe = try posix.pipe();
+    const stdout_pipe = try posix.pipe();
     defer {
-        posix.close(output_pipe[0]);
+        posix.close(stdout_pipe[0]);
     }
+
+    const stderr_pipe = if (opts.stdout_writer != opts.stderr_writer) try posix.pipe() else null;
+    defer {
+        if (stderr_pipe) |pipe| {
+            posix.close(pipe[0]);
+        }
+    }
+
     const err_pipe = try posix.pipe();
     defer {
         posix.close(err_pipe[0]);
@@ -208,89 +274,118 @@ pub fn run(
     switch (try posix.fork()) {
         0 => runChild(
             argv_buf,
+            opts.working_directory,
             envp,
             err_pipe[1],
             dev_null.handle,
-            output_pipe[1],
-            output_pipe[1],
-            working_directory,
+            stdout_pipe[1],
+            if (stderr_pipe) |pipe| pipe[1] else stdout_pipe[1],
         ),
         else => |pid| {
             const pidfd = try pidfd_open(pid, 0);
+            defer posix.close(pidfd);
 
             try posix.epoll_ctl(
                 epoll,
                 system.EPOLL.CTL_ADD,
                 pidfd,
-                @constCast(&system.epoll_event{ .events = system.EPOLL.IN, .data = .{ .ptr = @intFromPtr(&handlePid) } }),
+                @constCast(&system.epoll_event{
+                    .events = system.EPOLL.IN | system.EPOLL.ONESHOT,
+                    .data = .{ .ptr = @intFromPtr(&handlePid) },
+                }),
             );
 
             try posix.epoll_ctl(
                 epoll,
                 system.EPOLL.CTL_ADD,
                 err_pipe[0],
-                @constCast(&system.epoll_event{ .events = system.EPOLL.IN, .data = .{ .ptr = @intFromPtr(&handleError) } }),
+                @constCast(&system.epoll_event{
+                    .events = system.EPOLL.IN | system.EPOLL.ONESHOT,
+                    .data = .{ .ptr = @intFromPtr(&handleError) },
+                }),
             );
 
             try posix.epoll_ctl(
                 epoll,
                 system.EPOLL.CTL_ADD,
-                output_pipe[0],
-                @constCast(&system.epoll_event{ .events = system.EPOLL.IN, .data = .{ .ptr = @intFromPtr(&handleOutput) } }),
+                stdout_pipe[0],
+                @constCast(&system.epoll_event{
+                    .events = system.EPOLL.IN,
+                    .data = .{ .ptr = @intFromPtr(&handleStdout) },
+                }),
             );
 
-            if (timeout) |seconds| {
+            if (stderr_pipe) |pipe| {
+                try posix.epoll_ctl(
+                    epoll,
+                    system.EPOLL.CTL_ADD,
+                    pipe[0],
+                    @constCast(&system.epoll_event{
+                        .events = system.EPOLL.IN,
+                        .data = .{ .ptr = @intFromPtr(&handleStderr) },
+                    }),
+                );
+            }
+
+            if (opts.timeout) |seconds| {
                 try posix.timerfd_settime(
                     timerfd,
                     .{},
-                    &.{ .it_value = .{ .sec = seconds, .nsec = 0 }, .it_interval = .{ .sec = 0, .nsec = 0 } },
+                    &.{
+                        .it_value = .{ .sec = seconds, .nsec = 0 },
+                        .it_interval = .{ .sec = 0, .nsec = 0 },
+                    },
                     null,
                 );
                 try posix.epoll_ctl(
                     epoll,
                     system.EPOLL.CTL_ADD,
                     timerfd,
-                    @constCast(&system.epoll_event{ .events = system.EPOLL.IN, .data = .{ .ptr = @intFromPtr(&handleTimeout) } }),
+                    @constCast(&system.epoll_event{
+                        .events = system.EPOLL.IN,
+                        .data = .{ .ptr = @intFromPtr(&handleTimer) },
+                    }),
                 );
             }
 
-            var events: [1]system.epoll_event = undefined;
-            var output_buffer: [1024]u8 = undefined;
+            var events: [10]system.epoll_event = undefined;
+            var buffer: [1024]u8 = undefined;
 
-            var term: ?std.process.Child.Term = null;
+            var ret: anyerror!std.process.Child.Term = error.Unexpected;
+
+            var state: CallbackState = .{};
 
             while (true) {
-                const num_events = posix.epoll_wait(epoll, &events, -1);
-                if (num_events != events.len) {
-                    log.warn("got {} IO events, expected {}", .{ num_events, events.len });
-                    continue;
+                if (state.stdout_done and (stderr_pipe == null or state.stderr_done)) {
+                    if (state.process_complete) {
+                        return if (state.process_timeout) error.Timeout else ret;
+                    } else {
+                        try pidfd_send_signal(pidfd, posix.SIG.KILL);
+                    }
                 }
 
-                const event = events[0];
-                const func: *const fn (
-                    posix.fd_t,
-                    posix.fd_t,
-                    posix.fd_t,
-                    posix.fd_t,
-                    []u8,
-                    *std.Io.Writer,
-                ) anyerror!?std.process.Child.Term = @ptrFromInt(event.data.ptr);
+                const num_events = posix.epoll_wait(epoll, &events, -1);
+                for (events[0..num_events]) |event| {
+                    const func: *const fn (CallbackArgs) anyerror!?std.process.Child.Term = @ptrFromInt(event.data.ptr);
 
-                if (func(
-                    pidfd,
-                    timerfd,
-                    err_pipe[0],
-                    output_pipe[0],
-                    &output_buffer,
-                    output_writer,
-                ) catch |err| switch (err) {
-                    error.EndOfStream => return if (term) |t| t else err,
-                    else => return err,
-                }) |t| {
-                    if (term == null) {
-                        posix.close(output_pipe[1]);
-                        posix.close(pidfd);
-                        term = t;
+                    if (func(.{
+                        .events = event.events,
+                        .epoll = epoll,
+                        .pidfd = pidfd,
+                        .timerfd = timerfd,
+                        .errfd = err_pipe[0],
+                        .stdout_pipe = stdout_pipe,
+                        .stderr_pipe = if (stderr_pipe) |pipe| pipe else null,
+                        .output_buffer = &buffer,
+                        .stdout_writer = opts.stdout_writer,
+                        .stderr_writer = opts.stderr_writer,
+                        .state = &state,
+                    })) |term| {
+                        if (term) |t| {
+                            ret = t;
+                        }
+                    } else |err| {
+                        ret = err;
                     }
                 }
             }
@@ -298,7 +393,7 @@ pub fn run(
     }
 }
 
-test "run" {
+test run {
     if (builtin.os.tag != .linux) {
         return error.SkipZigTest;
     }
@@ -314,9 +409,11 @@ test "run" {
         try std.testing.expectError(error.Timeout, run(
             arena.allocator(),
             &.{ "sleep", "2" },
-            &output.writer,
-            "/",
-            1,
+            .{
+                .stdout_writer = &output.writer,
+                .stderr_writer = &output.writer,
+                .timeout = 1,
+            },
         ) catch |err| switch (err) {
             // Since this test is slightly impure in that it runs some
             // external command, we should allow for locked-down/sandboxed

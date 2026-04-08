@@ -70,7 +70,7 @@ pub fn logFn(
 
     const file = kmsg orelse {
         return std.log.defaultLog(
-            std.log.default_level,
+            level,
             scope,
             format,
             args,

@@ -83,7 +83,7 @@ class Machine(varlink.SimpleClientInterfaceHandler):
 
 
 def cli():
-    parser = ArgumentParser()
+    parser = ArgumentParser(prog=__name__)
     parser.add_argument(
         "-d",
         "--debug",
@@ -98,17 +98,31 @@ def cli():
         required=True,
         help="Address of the MixOS machine, of the form <ipv4>:<port>, [<ipv6>]:<port>, or vsock:<cid>:<port>",
     )
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest="method", help="Varlink method to call")
+    parser_run_command = subparsers.add_parser(
+        "RunCommand", help="Run a command on a MixOS machine"
+    )
+    parser_run_command.add_argument(
+        "-t", "--timeout", type=int, help="Timeout for command"
+    )
+    parser_run_command.add_argument(
         "command",
         type=str,
         nargs=REMAINDER,
-        help="Command to run on MixOS machine",
+        help="Command to run",
     )
+
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
 
-    with Machine(args.address) as machine:
-        response = machine.RunCommand(args.command)
-        print(response["output"].strip())
-        exit(response["exit_code"])
+    match args.method:
+        case "RunCommand":
+            with Machine(args.address) as machine:
+                response = machine.RunCommand(command=args.command, timeout=args.timeout)
+                print("exit_code:", response["exit_code"])
+                print("stdout:\n{}".format(response["stdout"].strip()))
+                print("stderr:\n{}".format(response["stderr"].strip()))
+        case _:
+            parser.print_usage()
+            exit(1)
