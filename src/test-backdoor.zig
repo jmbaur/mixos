@@ -15,7 +15,7 @@ const log = std.log.scoped(.mixos);
 const Context = struct {
     pub const vendor = "jmbaur";
     pub const product = "mixos";
-    pub const version = "1.0.2";
+    pub const version = "1.0.3";
     pub const url = "http://mixos.jmbaur.com";
     @"com.jmbaur.mixos": struct {
         pub const interface = mixos_varlink;
