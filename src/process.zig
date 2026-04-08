@@ -107,8 +107,6 @@ fn handlePid(args: CallbackArgs) anyerror!?std.process.Child.Term {
         _, .CONTINUED => .{ .Unknown = status },
     };
 
-    log.debug("process ended with term {}", .{term});
-
     return term;
 }
 

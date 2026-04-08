@@ -48,6 +48,8 @@ const Context = struct {
                 else => return err,
             };
 
+            log.debug("process ended with term {}", .{term});
+
             try request_context.serializeResponse(.{
                 .exit_code = switch (term) {
                     .Exited => |exited| @as(u32, exited),
