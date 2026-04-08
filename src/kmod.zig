@@ -14,6 +14,8 @@ ctx: *C.kmod_ctx,
 
 allocator: std.mem.Allocator,
 
+const VaList = @typeInfo(@typeInfo(@typeInfo(@typeInfo(@TypeOf(C.kmod_set_log_fn)).@"fn".params[1].type.?).optional.child).pointer.child).@"fn".params[6].type.?;
+
 extern fn kmod_log_wrapper(
     ?*anyopaque,
     c_int,
@@ -21,12 +23,12 @@ extern fn kmod_log_wrapper(
     c_int,
     [*c]const u8,
     [*c]const u8,
-    [*c]C.struct___va_list_tag_1,
+    VaList,
 ) callconv(.c) void;
 
-// Since zig does not have a great story for va_args with C interoperability,
-// we provide this function as the userdata to kmod's logging infrastructure to
-// a C function that does the processing of va_args.
+// Since zig does not have a great story for va_args with C interoperability
+// (yet), we provide this function as the userdata to kmod's logging
+// infrastructure to a C function that does the processing of va_args.
 fn kmod_log_unwrapped(priority: c_int, content: [*c]const u8) callconv(.c) void {
     const log_content = std.mem.trim(u8, std.mem.span(content), &std.ascii.whitespace);
 
