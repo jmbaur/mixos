@@ -28,7 +28,6 @@ let
     concatLines
     concatMapStringsSep
     const
-    fileContents
     filterAttrs
     getBin
     getExe
@@ -443,7 +442,7 @@ in
             };
             VERSION_ID = mkOption {
               type = types.str;
-              default = fileContents ./.version;
+              default = pkgs.mixos.version;
             };
           };
         };
