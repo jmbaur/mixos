@@ -16,6 +16,15 @@ class Protocol(Enum):
     VSOCK = 3
 
 
+class RebootType(Enum):
+    reboot = "reboot"
+    poweroff = "poweroff"
+    kexec = "kexec"
+
+    def __str__(self):
+        return self.value
+
+
 class Machine(varlink.SimpleClientInterfaceHandler):
     def __init__(self, conn):
         """
@@ -112,6 +121,16 @@ def cli():
         help="Command to run",
     )
 
+    parser_reboot = subparsers.add_parser("Reboot", help="Reboot a MixOS machine")
+    parser_reboot.add_argument(
+        "-t",
+        "--reboot-type",
+        type=RebootType,
+        choices=list(RebootType),
+        default="reboot",
+        help="The reboot type",
+    )
+
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
@@ -119,10 +138,16 @@ def cli():
     match args.method:
         case "RunCommand":
             with Machine(args.address) as machine:
-                response = machine.RunCommand(command=args.command, timeout=args.timeout)
+                response = machine.RunCommand(
+                    command=args.command, timeout=args.timeout
+                )
                 print("exit_code:", response["exit_code"])
                 print("stdout:\n{}".format(response["stdout"].strip()))
                 print("stderr:\n{}".format(response["stderr"].strip()))
+        case "Reboot":
+            with Machine(args.address) as machine:
+                machine.Reboot(reboot_type=str(args.reboot_type))
+                print(f'machine rebooted with reboot type "{args.reboot_type}"')
         case _:
             parser.print_usage()
             exit(1)

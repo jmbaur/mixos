@@ -20,6 +20,46 @@ const Context = struct {
     @"com.jmbaur.mixos": struct {
         pub const interface = mixos_varlink;
 
+        pub fn handleReboot(
+            context: *@This(),
+            parameters: mixos_varlink.Reboot.Parameters,
+            request_context: anytype,
+        ) !void {
+            _ = context;
+
+            const ready = if (parameters.reboot_type == .kexec) b: {
+                const kexec_loaded = std.fs.cwd().openFile("/sys/kernel/kexec_loaded", .{}) catch break :b false;
+                defer kexec_loaded.close();
+                var buf = [_]u8{0};
+                _ = kexec_loaded.read(&buf) catch break :b false;
+                break :b buf[0] == '1';
+            } else true;
+
+            if (!ready) {
+                return try request_context.serializeError(mixos_varlink.RebootNotReady{});
+            }
+
+            try request_context.serializeResponse(.{});
+
+            switch (parameters.reboot_type) {
+                .kexec => {
+                    posix.reboot(.KEXEC) catch |err| {
+                        log.err("failed to kexec: {}", .{err});
+                    };
+                },
+                .reboot => {
+                    posix.kill(1, posix.SIG.TERM) catch |err| {
+                        log.err("failed to reboot: {}", .{err});
+                    };
+                },
+                .poweroff => {
+                    posix.kill(1, posix.SIG.USR2) catch |err| {
+                        log.err("failed to poweroff: {}", .{err});
+                    };
+                },
+            }
+        }
+
         pub fn handleRunCommand(
             context: *@This(),
             parameters: mixos_varlink.RunCommand.Parameters,

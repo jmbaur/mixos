@@ -15,3 +15,17 @@ method RunCommand(command: []string, timeout: ?int) -> (
   stdout: string,
   stderr: string
 )
+
+# The available types of reboots. Note that for type "reboot" and "poweroff",
+# the graceful shutdown of services will occur since PID 1 on the machine will
+# be notified that the machine needs to be taken down, whereas with reboot type
+# "kexec" this will not happen. The limitation is due to busybox's PID1 not
+# having a signal we can send it to notify it that we want to perform a kexec.
+type RebootType (reboot, poweroff, kexec)
+
+# Indicates the machine is not ready to be rebooted. In the case of the "kexec"
+# reboot type, this means a kexec kernel has not yet been loaded.
+error RebootNotReady ()
+
+# Reboot the machine with the given reboot type.
+method Reboot(reboot_type: RebootType) -> ()
