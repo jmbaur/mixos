@@ -225,7 +225,7 @@
         let
           mixosConfig = inputs.self.lib.mixosSystem {
             modules = [
-              ./test/mixos-configuration.nix
+              ./example/mixos-configuration.nix
               {
                 nixpkgs.nixpkgs = inputs.nixpkgs;
                 nixpkgs.buildPlatform = system;
