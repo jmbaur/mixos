@@ -33,8 +33,6 @@ pub fn main() !void {
 
     var name = std.fs.path.basename(argv0);
 
-    const stdout_isatty = std.posix.isatty(std.fs.File.stdout().handle);
-
     var i: usize = 0;
     while (i < 2) : (i += 1) {
         if (std.mem.eql(u8, name, "sysinit")) {
@@ -64,20 +62,10 @@ pub fn main() !void {
             };
 
             if (func) |f| {
-                if (!stdout_isatty) {
-                    var name_buf = std.mem.zeroes([std.fs.max_name_bytes:0]u8);
-                    std.mem.copyForwards(u8, &name_buf, name);
-                    const namez = std.mem.sliceTo(&name_buf, 0);
+                syslog.init(name);
+                logger = .syslog;
 
-                    syslog.init(namez);
-                    logger = .syslog;
-                }
-
-                defer {
-                    if (logger == .syslog) {
-                        syslog.deinit();
-                    }
-                }
+                defer syslog.deinit();
 
                 return f(&args);
             }

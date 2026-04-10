@@ -5,8 +5,11 @@ const C = @cImport({
 
 var log_buffer = std.mem.zeroes([1024]u8);
 
-pub fn init(name: [*c]const u8) void {
-    C.openlog(name, 0, C.LOG_USER);
+pub fn init(name: []const u8) void {
+    var name_buf = std.mem.zeroes([std.fs.max_name_bytes:0]u8);
+    std.mem.copyForwards(u8, &name_buf, name);
+
+    C.openlog(std.mem.sliceTo(&name_buf, 0), C.LOG_ODELAY | C.LOG_PERROR, C.LOG_USER);
 }
 
 pub fn deinit() void {
