@@ -184,69 +184,101 @@ fn mountStore(
 
 /// Save memory by removing all initramfs content, excluding sysroot, which we
 /// will switch to eventually.
-fn removeAllInitramfsFiles() void {
-    log.debug("removing remnants of initramfs rootfs", .{});
+fn removeAllContent(dir: std.fs.Dir, directory: []const u8, new_root: std.fs.Dir) void {
+    var old_root = dir.openDir(directory, .{ .iterate = true }) catch return;
+    defer old_root.close();
 
-    var root_dir = std.fs.cwd().openDir("/", .{ .iterate = true }) catch |err| {
-        log.warn("failed to open root dir, not removing any rootfs contents: {}", .{err});
-        return;
-    };
+    var old_root_stat: system.Stat = undefined;
+    switch (system.E.init(system.fstat(old_root.fd, &old_root_stat))) {
+        .SUCCESS => {},
+        else => return,
+    }
 
-    var iter = root_dir.iterate();
-    outer: while (iter.next() catch return) |entry| {
-        inline for (&.{ "sysroot", "proc", "sys", "dev" }) |exclude| {
-            if (std.mem.eql(u8, entry.name, exclude)) {
-                continue :outer;
-            }
+    var new_root_stat: system.Stat = undefined;
+    switch (system.E.init(system.fstat(new_root.fd, &new_root_stat))) {
+        .SUCCESS => {},
+        else => return,
+    }
+
+    var iter = old_root.iterate();
+    while (iter.next() catch return) |entry| {
+        var entry_stat: system.Stat = undefined;
+        switch (system.E.init(system.fstatat(
+            old_root.fd,
+            entry.name[0..entry.name.len :0],
+            &entry_stat,
+            0,
+        ))) {
+            .SUCCESS => {},
+            else => |err| {
+                log.warn("failed to stat entry {s}: {}", .{ entry.name, err });
+                continue;
+            },
         }
 
-        root_dir.deleteTree(entry.name) catch |err| {
+        // If the entry is on the new root filesystem, skip it.
+        if (entry_stat.dev == new_root_stat.dev) {
+            continue;
+        }
+
+        old_root.deleteTree(entry.name) catch |err| {
             log.warn("failed to delete {s}: {}", .{ entry.name, err });
-            continue :outer;
+            continue;
         };
     }
 }
 
-inline fn switchRoot() !void {
-    {
-        var sysroot_dir = try std.fs.cwd().makeOpenPath("/sysroot", .{});
-        defer sysroot_dir.close();
+/// Returns a handle to the new root directory.
+inline fn switchRoot(root_dir: std.fs.Dir) !void {
+    try root_dir.makePath("sysroot");
 
-        var tmpfs = try Mount.init("tmpfs");
-        try tmpfs.finish(sysroot_dir, ".", Mount.Options.NODEV | Mount.Options.NOSUID);
+    var tmpfs = try Mount.init("tmpfs");
+    try tmpfs.finish(root_dir, "sysroot", Mount.Options.NODEV | Mount.Options.NOSUID);
 
-        removeAllInitramfsFiles();
+    var sysroot_dir = try root_dir.openDir("sysroot", .{});
+    defer sysroot_dir.close();
 
-        // Create directories that do not yet exist
-        inline for (&.{ "dev", "sys", "proc" }) |path| {
-            try sysroot_dir.makePath(path);
-        }
+    // TODO(jared): enumerate all possible errors
+    switch (system.E.init(system.fchdir(sysroot_dir.fd))) {
+        .SUCCESS => {},
+        else => |err| {
+            log.err("failed to change directory to /sysroot: {s}", .{@tagName(err)});
+            return posix.unexpectedErrno(err);
+        },
+    }
 
-        log.debug("moving pseudofilesystems into final root filesystem", .{});
-        try Mount.move_mount(std.fs.cwd().fd, "/dev", sysroot_dir.fd, "dev", 0);
-        try Mount.move_mount(std.fs.cwd().fd, "/sys", sysroot_dir.fd, "sys", 0);
-        try Mount.move_mount(std.fs.cwd().fd, "/proc", sysroot_dir.fd, "proc", 0);
-        try Mount.move_mount(std.fs.cwd().fd, "/sysroot", sysroot_dir.fd, "/", 0);
+    // Create directories that do not yet exist
+    inline for (&.{ "dev", "sys", "proc" }) |path| {
+        try sysroot_dir.makePath(path);
+    }
 
-        // TODO(jared): enumerate all possible errors
-        switch (system.E.init(system.chdir("/sysroot"))) {
-            .SUCCESS => {},
-            else => |err| {
-                log.err("failed to change directory to /sysroot: {s}", .{@tagName(err)});
-                return posix.unexpectedErrno(err);
-            },
-        }
+    // move pseudofilesystems into final root filesystem
+    try Mount.move_mount(root_dir.fd, "dev", sysroot_dir.fd, "dev", 0);
+    try Mount.move_mount(root_dir.fd, "sys", sysroot_dir.fd, "sys", 0);
+    try Mount.move_mount(root_dir.fd, "proc", sysroot_dir.fd, "proc", 0);
 
-        log.debug("chrooting into final root filesystem", .{});
+    log.debug("removing remnants of initramfs", .{});
+    removeAllContent(std.fs.cwd(), "/", sysroot_dir);
 
-        // TODO(jared): enumerate all possible errors
-        switch (system.E.init(system.chroot("."))) {
-            .SUCCESS => {},
-            else => |err| {
-                log.err("failed to chroot: {s}", .{@tagName(err)});
-                return posix.unexpectedErrno(err);
-            },
-        }
+    // overmount current root
+    try Mount.move_mount(sysroot_dir.fd, ".", root_dir.fd, "/", 0);
+
+    // TODO(jared): enumerate all possible errors
+    switch (system.E.init(system.chroot("."))) {
+        .SUCCESS => {},
+        else => |err| {
+            log.err("failed to chroot: {s}", .{@tagName(err)});
+            return posix.unexpectedErrno(err);
+        },
+    }
+
+    // TODO(jared): enumerate all possible errors
+    switch (system.E.init(system.chdir("/"))) {
+        .SUCCESS => {},
+        else => |err| {
+            log.err("failed to change directory to /: {s}", .{@tagName(err)});
+            return posix.unexpectedErrno(err);
+        },
     }
 }
 
@@ -729,15 +761,16 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
 
         store_blockdev = try createStoreLoopback(allocator, store_fd, manifest.storeFS);
 
-        try switchRoot();
+        try switchRoot(root_dir);
     }
+
+    var root_dir = try std.fs.cwd().openDir("/", .{});
+    defer root_dir.close();
+
     defer kmsg.deinit();
 
     var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(w) else null;
     errdefer if (watchdog) |*w| w.deinit();
-
-    var root_dir = try std.fs.cwd().openDir("/", .{});
-    defer root_dir.close();
 
     try setupRoot(allocator, root_dir, &manifest, store_blockdev);
 
