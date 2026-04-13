@@ -205,11 +205,10 @@ pub const Options = struct {
     pub const NODIRATIME = C.MOUNT_ATTR_NODIRATIME;
     pub const IDMAP = C.MOUNT_ATTR_IDMAP;
     pub const NOSYMFOLLOW = C.MOUNT_ATTR_NOSYMFOLLOW;
-    pub const SIZE_VER0 = C.MOUNT_ATTR_SIZE_VER0;
 };
 
 const mount_attrs = std.StaticStringMap(u32).initComptime(.{
-    .{ "ro", C.MOUNT_ATTR_RDONLY },
+    .{ "rdonly", C.MOUNT_ATTR_RDONLY },
     .{ "relatime", C.MOUNT_ATTR_RELATIME },
     .{ "nosuid", C.MOUNT_ATTR_NOSUID },
     .{ "nodev", C.MOUNT_ATTR_NODEV },
@@ -219,20 +218,3 @@ const mount_attrs = std.StaticStringMap(u32).initComptime(.{
     .{ "strictatime", C.MOUNT_ATTR_STRICTATIME },
     .{ "defaults", 0 },
 });
-
-pub fn mount(
-    special: [*:0]const u8,
-    dir: [*:0]const u8,
-    fstype: ?[*:0]const u8,
-    flags: u32,
-    data: usize,
-) !void {
-    // TODO(jared): enumerate all possible errors
-    switch (system.E.init(system.mount(special, dir, fstype, flags, data))) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("failed to mount \"{s}\" on \"{s}\": {s}", .{ special, dir, @tagName(err) });
-            return std.posix.unexpectedErrno(err);
-        },
-    }
-}

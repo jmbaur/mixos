@@ -330,7 +330,7 @@ pub fn run(
                     timerfd,
                     .{},
                     &.{
-                        .it_value = .{ .sec = seconds, .nsec = 0 },
+                        .it_value = .{ .sec = @intCast(seconds), .nsec = 0 },
                         .it_interval = .{ .sec = 0, .nsec = 0 },
                     },
                     null,

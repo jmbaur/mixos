@@ -15,7 +15,7 @@ const log = std.log.scoped(.mixos);
 const LOOP_SET_FD = 0x4C00;
 const LOOP_CTL_GET_FREE = 0x4C82;
 
-fn find_cmdline(cmdline: []const u8, want_key: []const u8) ?[]const u8 {
+fn findCmdline(cmdline: []const u8, want_key: []const u8) ?[]const u8 {
     var entry_split = std.mem.tokenizeSequence(u8, cmdline, &std.ascii.whitespace);
     while (entry_split.next()) |entry| {
         var split = std.mem.splitScalar(u8, entry, '=');
@@ -30,10 +30,10 @@ fn find_cmdline(cmdline: []const u8, want_key: []const u8) ?[]const u8 {
     return null;
 }
 
-test "find_cmdline" {
-    try std.testing.expectEqual(null, find_cmdline("foo", ""));
-    try std.testing.expectEqualStrings("1", find_cmdline("foo=1", "foo") orelse unreachable);
-    try std.testing.expectEqualStrings("1", find_cmdline("foo=1 \t\n", "foo") orelse unreachable);
+test findCmdline {
+    try std.testing.expectEqual(null, findCmdline("foo", ""));
+    try std.testing.expectEqualStrings("1", findCmdline("foo=1", "foo") orelse unreachable);
+    try std.testing.expectEqualStrings("1", findCmdline("foo=1 \t\n", "foo") orelse unreachable);
 }
 
 // TODO(jared): Make this a hashmap of kconfig to bool to allow for easier
@@ -116,8 +116,8 @@ fn ftruncate(fd: posix.fd_t, length: i64) !void {
     }
 }
 
-fn sendfile(outfd: posix.fd_t, infd: posix.fd_t, offset: ?*i64, count: usize) !usize {
-    const ret = system.sendfile(outfd, infd, offset, count);
+fn sendfile(outfd: posix.fd_t, infd: posix.fd_t, offset: ?*i64, count: u64) !usize {
+    const ret = system.sendfile(outfd, infd, offset, @intCast(count));
     switch (system.E.init(ret)) {
         .SUCCESS => return ret,
         else => |err| return posix.unexpectedErrno(err),
@@ -246,10 +246,12 @@ inline fn switchRoot() !void {
     }
 }
 
-inline fn setupRoot(allocator: std.mem.Allocator, manifest: *const Manifest, store_blockdev: []const u8) !void {
-    var root_dir = try std.fs.cwd().openDir("/", .{});
-    defer root_dir.close();
-
+inline fn setupRoot(
+    allocator: std.mem.Allocator,
+    root_dir: std.fs.Dir,
+    manifest: *const Manifest,
+    store_blockdev: []const u8,
+) !void {
     // Create directories that do not yet exist
     inline for (&.{ "usr", "etc", "run", "tmp", "var", "root", "home" }) |path| {
         try root_dir.makePath(path);
@@ -261,82 +263,73 @@ inline fn setupRoot(allocator: std.mem.Allocator, manifest: *const Manifest, sto
     try usr.finish(root_dir, "usr", 0);
 
     // setup usr-merge
-    std.fs.cwd().symLink("/usr/bin", "/bin", .{ .is_directory = true }) catch {};
-    std.fs.cwd().symLink("/usr/sbin", "/sbin", .{ .is_directory = true }) catch {};
-    std.fs.cwd().symLink("/usr/lib", "/lib", .{ .is_directory = true }) catch {};
+    root_dir.symLink("usr/bin", "/bin", .{ .is_directory = true }) catch {};
+    root_dir.symLink("usr/sbin", "/sbin", .{ .is_directory = true }) catch {};
+    root_dir.symLink("usr/lib", "/lib", .{ .is_directory = true }) catch {};
 }
 
 /// By the point this runs, we already have /sys, /dev, and /proc mounted.
 fn mountPseudoFilesystems(kernel: *const KernelConfig) void {
-    if (kernel.UNIX98_PTYS) {
-        std.fs.cwd().makeDir("/dev/pts") catch {};
-        Mount.mount(
-            "devpts",
+    if (kernel.UNIX98_PTYS) b: {
+        std.fs.cwd().makeDir("/dev/pts") catch break :b;
+        var mnt = Mount.init("devpts") catch break :b;
+        mnt.finish(
+            std.fs.cwd(),
             "/dev/pts",
-            "devpts",
-            system.MS.NOEXEC | system.MS.NOSUID,
-            0,
-        ) catch {};
+            Mount.Options.NOSUID | Mount.Options.NOEXEC,
+        ) catch break :b;
     }
 
-    if (kernel.CONFIGFS_FS) {
-        Mount.mount(
-            "configfs",
+    if (kernel.CONFIGFS_FS) b: {
+        var mnt = Mount.init("configfs") catch break :b;
+        mnt.finish(
+            std.fs.cwd(),
             "/sys/kernel/config",
-            "configfs",
-            system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV,
-            0,
-        ) catch {};
+            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+        ) catch break :b;
     }
 
-    if (kernel.DEBUG_FS_ALLOW_ALL) {
-        Mount.mount(
-            "debugfs",
+    if (kernel.DEBUG_FS_ALLOW_ALL) b: {
+        var mnt = Mount.init("debugfs") catch break :b;
+        mnt.finish(
+            std.fs.cwd(),
             "/sys/kernel/debug",
-            "debugfs",
-            system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV,
-            0,
-        ) catch {};
+            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+        ) catch break :b;
     }
 
-    if (kernel.FTRACE) {
-        Mount.mount(
-            "tracefs",
+    if (kernel.FTRACE) b: {
+        var mnt = Mount.init("tracefs") catch break :b;
+        mnt.finish(
+            std.fs.cwd(),
             "/sys/kernel/tracing",
-            "tracefs",
-            system.MS.NOSUID | system.MS.NODEV | system.MS.NOEXEC | system.MS.RELATIME,
-            0,
-        ) catch {};
+            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+        ) catch break :b;
     }
 
     // /sys/kernel/security directory only exists if both these KConfig options are enabled, see https://github.com/torvalds/linux/blob/c612261bedd6bbab7109f798715e449c9d20ff2f/security/inode.c#L366
-    if (kernel.SECURITY and kernel.SECURITYFS) {
-        Mount.mount(
-            "securityfs",
+    if (kernel.SECURITY and kernel.SECURITYFS) b: {
+        var mnt = Mount.init("securityfs") catch break :b;
+        mnt.finish(
+            std.fs.cwd(),
             "/sys/kernel/security",
-            "securityfs",
-            system.MS.NOSUID | system.MS.NODEV | system.MS.NOEXEC | system.MS.RELATIME,
-            0,
-        ) catch {};
+            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+        ) catch break :b;
     }
 
-    if (kernel.CGROUPS) {
-        Mount.mount(
-            "cgroup2",
+    if (kernel.CGROUPS) b: {
+        var mnt = Mount.init("cgroup2") catch break :b;
+        mnt.finish(
+            std.fs.cwd(),
             "/sys/fs/cgroup",
-            "cgroup2",
-            system.MS.NOEXEC | system.MS.RELATIME | system.MS.NOSUID | system.MS.NODEV,
-            @intFromPtr("nsdelegate,memory_recursiveprot"),
-        ) catch {};
+            Mount.Options.NOEXEC | Mount.Options.NOSUID | Mount.Options.NODEV,
+        ) catch break :b;
     }
 
     if (kernel.SHMEM) b: {
-        if (std.fs.cwd().makeDir("/dev/shm")) {
-            var shm = Mount.init("tmpfs") catch break :b;
-            shm.finish(std.fs.cwd(), "/dev/shm", Mount.Options.NOSUID | Mount.Options.NODEV) catch break :b;
-        } else |err| {
-            log.err("failed to create /dev/shm: {}", .{err});
-        }
+        std.fs.cwd().makeDir("/dev/shm") catch break :b;
+        var mnt = Mount.init("tmpfs") catch break :b;
+        mnt.finish(std.fs.cwd(), "/dev/shm", Mount.Options.NOSUID | Mount.Options.NODEV) catch break :b;
     }
 }
 
@@ -599,7 +592,7 @@ fn extractHostname(etc_hostname_contents: []const u8) ?[]const u8 {
     return null;
 }
 
-test "extractHostname" {
+test extractHostname {
     try std.testing.expectEqual(null, extractHostname("# foo"));
     try std.testing.expectEqual(null, extractHostname(" # foo"));
     try std.testing.expectEqual(null, extractHostname(""));
@@ -687,31 +680,46 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
 
     const allocator = arena.allocator();
 
-    inline for (&.{ "/dev", "/sys", "/proc" }) |path| {
-        try std.fs.cwd().makePath(path);
-    }
-    try Mount.mount("devtmpfs", "/dev", "devtmpfs", system.MS.NOEXEC | system.MS.NOSUID, 0);
-    try Mount.mount("sysfs", "/sys", "sysfs", system.MS.NOEXEC | system.MS.NOSUID, 0);
-    try Mount.mount("proc", "/proc", "proc", system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV, 0);
+    var manifest: Manifest = undefined;
+    var store_blockdev: []const u8 = undefined;
 
-    // We must wait until now to setup the /dev/kmsg logger, since /dev is not
-    // mounted until right before this.
-    kmsg.init();
+    // pre switch-root
+    {
+        var root_dir = try std.fs.cwd().openDir("/", .{});
+        defer root_dir.close();
+
+        inline for (&.{ "dev", "sys", "proc" }) |path| {
+            try root_dir.makePath(path);
+        }
+        var devtmpfs = try Mount.init("devtmpfs");
+        try devtmpfs.finish(root_dir, "dev", Mount.Options.NOEXEC | Mount.Options.NOSUID);
+        var sysfs = try Mount.init("sysfs");
+        try sysfs.finish(root_dir, "sys", Mount.Options.NOEXEC | Mount.Options.NOSUID);
+        var proc = try Mount.init("proc");
+        try proc.finish(root_dir, "proc", Mount.Options.NOEXEC | Mount.Options.NOSUID | Mount.Options.NODEV);
+
+        // We must wait until now to setup the /dev/kmsg logger, since /dev is not
+        // mounted until right before this.
+        kmsg.init();
+
+        const manifest_json = try root_dir.openFile("manifest.json", .{});
+        defer manifest_json.close();
+
+        const manifest_json_contents = try manifest_json.readToEndAlloc(allocator, std.math.maxInt(usize));
+        const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_json_contents, .{});
+
+        manifest = manifest_.value;
+
+        store_blockdev = try createStoreLoopback(allocator, store_fd, manifest.storeFS);
+
+        try switchRoot();
+    }
     defer kmsg.deinit();
 
-    const manifest_json = try std.fs.cwd().openFile("/manifest.json", .{});
-    defer manifest_json.close();
+    var root_dir = try std.fs.cwd().openDir("/", .{});
+    defer root_dir.close();
 
-    const manifest_json_contents = try manifest_json.readToEndAlloc(allocator, std.math.maxInt(usize));
-    const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_json_contents, .{});
-
-    const manifest: Manifest = manifest_.value;
-
-    const store_blockdev = try createStoreLoopback(allocator, store_fd, manifest.storeFS);
-
-    try switchRoot();
-
-    try setupRoot(allocator, &manifest, store_blockdev);
+    try setupRoot(allocator, root_dir, &manifest, store_blockdev);
 
     mountPseudoFilesystems(&manifest.boot.kernel);
 
