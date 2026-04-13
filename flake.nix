@@ -256,6 +256,8 @@
               "-nographic"
               "-device"
               "vhost-vsock-pci,guest-cid=3"
+              "-device"
+              "i6300esb" # watchdog
               "-virtfs"
               "local,path=./,security_model=none,mount_tag=host"
               "-kernel"

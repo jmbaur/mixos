@@ -197,6 +197,15 @@ in
           Kernel modules to load during early bootup.
         '';
       };
+
+      watchdog.enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Enable watchdog integration. This ensures if the boot process fails,
+          the system doesn't hang indefinitely.
+        '';
+      };
     };
 
     bin = mkOption {
@@ -635,6 +644,11 @@ in
           action = "respawn";
           process = "/bin/ntpd -n";
         });
+
+        watchdog = mkIf config.boot.watchdog.enable {
+          action = "once";
+          process = mkDefault "/bin/watchdog -F /dev/watchdog";
+        };
       };
 
       services = {
@@ -653,6 +667,7 @@ in
         "EROFS_FS"
         "EROFS_FS_BACKED_BY_FILE"
         "EROFS_FS_ZIP_LZMA"
+        "EVENTFD"
         "FUTEX"
         "OVERLAY_FS"
         "RD_XZ"
@@ -775,6 +790,7 @@ in
                   "UNIX98_PTYS"
                 ]
               );
+              watchdog = if config.boot.watchdog.enable then { } else null;
             };
             state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
           };

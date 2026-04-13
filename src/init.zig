@@ -1,5 +1,6 @@
 const Kmod = @import("kmod.zig");
 const Mount = @import("mount.zig");
+const Watchdog = @import("watchdog.zig");
 const builtin = @import("builtin");
 const kmsg = @import("kmsg.zig");
 const posix = std.posix;
@@ -51,9 +52,12 @@ const KernelConfig = struct {
     UNIX: bool,
 };
 
+const WatchdogConfig = struct {};
+
 const BootConfig = struct {
     kernelModules: []const []const u8,
     kernel: KernelConfig,
+    watchdog: ?WatchdogConfig,
 };
 
 const StateConfig = struct {
@@ -672,6 +676,15 @@ fn memfd_create(name: [*:0]const u8, flags: u32) !posix.fd_t {
     }
 }
 
+fn setupWatchdog(watchdog: *const WatchdogConfig) !?Watchdog {
+    _ = watchdog;
+
+    return Watchdog.init() catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+}
+
 fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
     // We create this memfd object as early as possible, mostly so we get the
     // vanity of having a low file descriptor number.
@@ -720,6 +733,9 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
     }
     defer kmsg.deinit();
 
+    var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(w) else null;
+    errdefer if (watchdog) |*w| w.deinit();
+
     var root_dir = try std.fs.cwd().openDir("/", .{});
     defer root_dir.close();
 
@@ -739,25 +755,9 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
         log.err("failed to run mdev: {}", .{err});
     };
 
-    if (manifest.state) |state| {
-        initState(allocator, &state) catch |err| {
-            log.err("failed to mount state: {}", .{err});
+    if (manifest.state) |state| try initState(allocator, &state);
 
-            // If we failed to mount /state, not much else will work. Prevent the
-            // boot from continuing by blocking here.
-            var futex = std.atomic.Value(u32).init(0);
-            while (true) std.Thread.Futex.wait(&futex, 0);
-        };
-    }
-
-    setupState(root_dir, manifest.etc) catch |err| {
-        log.err("failed to setup state: {}", .{err});
-
-        // If we failed to mount /state, not much else will work. Prevent the
-        // boot from continuing by blocking here.
-        var futex = std.atomic.Value(u32).init(0);
-        while (true) std.Thread.Futex.wait(&futex, 0);
-    };
+    try setupState(root_dir, manifest.etc);
 
     setupHostname(allocator) catch |err| {
         log.err("failed to set hostname: {}", .{err});
@@ -769,6 +769,8 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
 
     log.debug("executing init {s}", .{manifest.init});
 
+    if (watchdog) |*w| w.disarm();
+
     return try init_allocator.dupeZ(u8, manifest.init);
 }
 
@@ -777,27 +779,30 @@ pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
     _ = args;
 
     if (system.getpid() != 1) {
-        std.debug.panic("not running as PID1, refusing to continue", .{});
+        log.err("not running as PID1, refusing to continue", .{});
+        @panic("PANIC");
     }
 
     var fba_buffer = std.mem.zeroes([std.fs.max_path_bytes]u8);
     var fba: std.heap.FixedBufferAllocator = .init(&fba_buffer);
 
     const init = setupSystem(fba.allocator()) catch |err| {
-        std.debug.panic("system setup failed: {}", .{err});
+        std.log.err("system setup failed: {}\n", .{err});
+
+        var futex = std.atomic.Value(u32).init(0);
+        while (true) std.Thread.Futex.wait(&futex, 0);
     };
 
     const argv_buf = try fba.allocator().allocSentinel(?[*:0]const u8, 1, null);
     argv_buf[0] = init;
 
     comptime std.debug.assert(builtin.link_libc);
-    std.debug.panic(
-        "execv PID1 failed: {}",
-        .{posix.execvpeZ_expandArg0(
-            .no_expand,
-            argv_buf.ptr[0].?,
-            argv_buf.ptr,
-            std.c.environ,
-        )},
+    const err = posix.execvpeZ_expandArg0(
+        .no_expand,
+        argv_buf.ptr[0].?,
+        argv_buf.ptr,
+        std.c.environ,
     );
+    log.err("execv PID1 failed: {}", .{err});
+    @panic("PANIC");
 }

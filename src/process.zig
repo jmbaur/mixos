@@ -329,10 +329,7 @@ pub fn run(
                 try posix.timerfd_settime(
                     timerfd,
                     .{},
-                    &.{
-                        .it_value = .{ .sec = @intCast(seconds), .nsec = 0 },
-                        .it_interval = .{ .sec = 0, .nsec = 0 },
-                    },
+                    &.{ .it_value = .{ .sec = @intCast(seconds), .nsec = 0 }, .it_interval = .{ .sec = 0, .nsec = 0 } },
                     null,
                 );
                 try posix.epoll_ctl(
