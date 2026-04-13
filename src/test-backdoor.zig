@@ -11,8 +11,6 @@ const C = @cImport({
     @cInclude("linux/vm_sockets.h");
 });
 
-pub const logFn = syslog.logFn;
-
 const log = std.log.scoped(.mixos);
 
 const Context = struct {
