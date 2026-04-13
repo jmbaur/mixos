@@ -61,7 +61,7 @@
               };
 
               __structuredAttrs = true;
-              doCheck = false; # true;
+              doCheck = true;
               strictDeps = true;
 
               nativeBuildInputs = [
@@ -74,7 +74,7 @@
 
               zigBuildFlags = [
                 "--color off"
-                "-Doptimize=Debug" # ReleaseSafe"
+                "-Doptimize=ReleaseSmall"
                 "-Dcpu=baseline"
                 "-Dtarget=${stdenvNoCC.hostPlatform.qemuArch}-${stdenvNoCC.hostPlatform.parsed.kernel.name}"
               ];
