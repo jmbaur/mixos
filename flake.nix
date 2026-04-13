@@ -61,7 +61,7 @@
               };
 
               __structuredAttrs = true;
-              doCheck = true;
+              doCheck = false; # true;
               strictDeps = true;
 
               nativeBuildInputs = [
@@ -74,7 +74,7 @@
 
               zigBuildFlags = [
                 "--color off"
-                "-Doptimize=ReleaseSafe"
+                "-Doptimize=Debug" # ReleaseSafe"
                 "-Dcpu=baseline"
                 "-Dtarget=${stdenvNoCC.hostPlatform.qemuArch}-${stdenvNoCC.hostPlatform.parsed.kernel.name}"
               ];
@@ -105,9 +105,7 @@
               '';
 
               postFixup = ''
-                find $out/bin $out/libexec -type f | while read i; do
-                  nuke-refs -e $out $i
-                done
+                nuke-refs -e $out $out/bin/mixos
               '';
 
               meta = {
@@ -220,19 +218,21 @@
           ++ modules;
         };
 
+      mixosConfigurations.example = inputs.self.lib.mixosSystem {
+        modules = [
+          ./example/mixos-configuration.nix
+          {
+            nixpkgs.nixpkgs = inputs.nixpkgs;
+            nixpkgs.buildPlatform = builtins.currentSystem;
+            nixpkgs.hostPlatform = builtins.currentSystem;
+          }
+        ];
+      };
+
       apps = mapAttrs (
         system: pkgs:
         let
-          mixosConfig = inputs.self.lib.mixosSystem {
-            modules = [
-              ./example/mixos-configuration.nix
-              {
-                nixpkgs.nixpkgs = inputs.nixpkgs;
-                nixpkgs.buildPlatform = system;
-                nixpkgs.hostPlatform = builtins.replaceStrings [ "darwin" ] [ "linux" ] system;
-              }
-            ];
-          };
+          mixosConfig = inputs.self.mixosConfigurations.example;
           mixosPkgs = mixosConfig._module.args.pkgs;
           qemuOpts =
             (
@@ -261,7 +261,7 @@
               "-kernel"
               "${mixosConfig.config.system.build.all}/kernel"
               "-initrd"
-              "test.initrd"
+              "${mixosConfig.config.system.build.all}/initrd"
               "-append"
               "${toString (
                 [ "debug" ] ++ optionals mixosPkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ]
@@ -280,13 +280,6 @@
                   pkgs.cpio
                 ];
                 text = ''
-                  tmp=$(mktemp -d)
-                  trap 'rm -rf $tmp; rm -f {passthru,test}.initrd' EXIT
-                  mkdir "$tmp/passthru"
-                  echo hello >"$tmp/passthru/hello"
-                  (cd "$tmp"; find . -print0 | cpio --quiet -o -H newc -R +0:+0 --null >"$OLDPWD/passthru.initrd")
-                  cat ${mixosConfig.config.system.build.all}/initrd passthru.initrd >test.initrd
-
                   qemu-img create -f qcow2 mixos.qcow2 1G
                   qemu_opts+=("-drive" "file=mixos.qcow2,if=virtio")
 

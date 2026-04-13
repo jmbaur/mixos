@@ -29,12 +29,14 @@ let
     concatMapStringsSep
     const
     filterAttrs
+    flatten
     getBin
     getExe
     getExe'
     getOutput
     id
     literalExpression
+    mapAttrs'
     mapAttrsToList
     mergeOneOption
     mkBefore
@@ -209,11 +211,26 @@ in
       type = types.attrsOf (
         types.submodule {
           options = {
-            source = mkOption { type = types.path; };
+            source = mkOption {
+              type = types.path;
+              description = ''
+                Path to place in /etc
+              '';
+            };
+            mode = mkOption {
+              type = types.nullOr types.str;
+              example = null;
+              description = ''
+                Copy file to destination with permissions, or symlink if null.
+              '';
+            };
           };
         }
       );
       default = { };
+      example = literalExpression ''
+        { "hostname".source = pkgs.writeText "hostname" "my-machine"; }
+      '';
     };
 
     groups = mkOption {
@@ -351,28 +368,25 @@ in
 
     services = mkOption {
       type = types.attrsOf (
-        types.submodule (
-          { ... }:
-          {
-            options = {
-              enable = mkOption {
-                type = types.bool;
-                default = true;
-                description = ''
-                  Whether to enable this service.
-                '';
-              };
-
-              run = mkOption {
-                type = types.path;
-                example = literalExpression "/bin/httpd";
-                description = ''
-                  Specifies the process to be executed for this service.
-                '';
-              };
+        types.submodule (_: {
+          options = {
+            enable = mkOption {
+              type = types.bool;
+              default = true;
+              description = ''
+                Whether to enable this service.
+              '';
             };
-          }
-        )
+
+            run = mkOption {
+              type = types.path;
+              example = literalExpression "/bin/httpd";
+              description = ''
+                Specifies the process to be executed for this service.
+              '';
+            };
+          };
+        })
       );
       default = { };
     };
@@ -389,6 +403,7 @@ in
       init = mkOption {
         type = types.nullOr types.path;
         default = null;
+        example = "mkfs.ext4 /dev/sda";
         description = ''
           Program to initialize state. For example, formatting disks, creating
           device-mapper devices, etc.
@@ -396,12 +411,14 @@ in
       };
       fsType = mkOption {
         type = types.str;
+        example = "ext4";
         description = ''
           The filesystem type of the state device.
         '';
       };
-      device = mkOption {
+      source = mkOption {
         type = types.str;
+        example = "/dev/sda";
         description = ''
           The device being mounted.
         '';
@@ -410,7 +427,11 @@ in
         type = types.listOf types.str;
         default = [ ];
         description = ''
-          The mount options to use when mounting the state device.
+          The mount options to use when mounting the state device. Available
+          options can usually be found in fs/<fstype>/super.c of the kernel
+          source. In addition, any of the `MOUNT_ATTR_*` names can be used with
+          name lowercased and the "MOUNT_ATTR_" prefix removed (see
+          `<linux.mount.h>`).
         '';
       };
     };
@@ -508,101 +529,62 @@ in
       };
     }
     {
-      etc = {
-        "inittab".source = pkgs.writeText "mixos-inittab" inittab;
-        "mdev.conf".source = pkgs.writeText "mdev.conf" config.mdev.rules;
-        "hosts".source = mkIf (kernelPackage.config.isYes "NET") (
-          mkDefault (
-            pkgs.writeText "etc-hosts" ''
-              127.0.0.1 localhost
-              ::1 localhost
-            ''
-          )
-        );
-        "os-release".source = osReleaseFormat.generate "os-release" config.mixos.osRelease;
-        "passwd".source = pkgs.writeText "passwd" (
-          concatLines (
-            map (
-              {
-                name,
-                uid,
-                gid,
-                description,
-                home,
-                shell,
-                ...
-              }:
-              "${name}:x:${toString uid}:${toString gid}:${description}:${home}:${shell}"
-            ) (attrValues config.users)
-          )
-        );
-        "group".source = pkgs.writeText "group" (
-          concatLines (
-            map (
-              { name, id, ... }:
-              let
-                members = mapAttrsToList (_: { name, ... }: name) (
-                  filterAttrs (_: { groups, ... }: elem name groups) config.users
-                );
-              in
-              "${name}:x:${toString id}:${concatStringsSep "," members}"
-            ) (attrValues config.groups)
-          )
-        );
-      };
+      etc = mkMerge [
+        {
+          "inittab".source = pkgs.writeText "mixos-inittab" inittab;
+          "mdev.conf".source = pkgs.writeText "mdev.conf" config.mdev.rules;
+          "hosts".source = mkIf (kernelPackage.config.isYes "NET") (
+            mkDefault (
+              pkgs.writeText "etc-hosts" ''
+                127.0.0.1 localhost
+                ::1 localhost
+              ''
+            )
+          );
+          "os-release".source = osReleaseFormat.generate "os-release" config.mixos.osRelease;
+          "passwd".source = pkgs.writeText "passwd" (
+            concatLines (
+              map (
+                {
+                  name,
+                  uid,
+                  gid,
+                  description,
+                  home,
+                  shell,
+                  ...
+                }:
+                "${name}:x:${toString uid}:${toString gid}:${description}:${home}:${shell}"
+              ) (attrValues config.users)
+            )
+          );
+          "group".source = pkgs.writeText "group" (
+            concatLines (
+              map (
+                { name, id, ... }:
+                let
+                  members = mapAttrsToList (_: { name, ... }: name) (
+                    filterAttrs (_: { groups, ... }: elem name groups) config.users
+                  );
+                in
+                "${name}:x:${toString id}:${concatStringsSep "," members}"
+              ) (attrValues config.groups)
+            )
+          );
+        }
+        (mapAttrs' (name: service: {
+          name = "service/${name}/run";
+          value.source = service.run;
+        }) (filterAttrs (const (getAttr "enable")) config.services))
+      ];
 
       # This mdev rule ensures all devices get their $MODALIAS value modprobed
       # to allow for automatic kernel module loading.
       mdev.rules = mkBefore ''
-        $MODALIAS=.* 0:0 660 @modprobe "$MODALIAS"
+        $MODALIAS=.* 0:0 660 @/bin/mixos modprobe "$MODALIAS"
       '';
 
       init = {
-        mixos-startup = {
-          action = "sysinit";
-          process = toString [
-            (getExe pkgs.mixos)
-            "sysinit"
-            ((pkgs.formats.json { }).generate "sysinit.json" {
-              boot = {
-                inherit (config.boot) kernelModules;
-                kernel = listToAttrs (
-                  map (option: nameValuePair option (kernelPackage.config.isYes option)) [
-                    "CGROUPS"
-                    "CONFIGFS_FS"
-                    "DEBUG_FS_ALLOW_ALL"
-                    "FTRACE"
-                    "MODULES"
-                    "SECURITY"
-                    "SECURITYFS"
-                    "SHMEM"
-                    "UNIX" # implies CONFIG_NET
-                    "UNIX98_PTYS"
-                  ]
-                );
-              };
-              state = {
-                where = "/state";
-              }
-              // (
-                if config.state.enable then
-                  {
-                    what = config.state.device;
-                    type = config.state.fsType;
-                    inherit (config.state) options init;
-                  }
-                else
-                  {
-                    what = "tmpfs";
-                    type = "tmpfs";
-                    options = [ "mode=755" ];
-                    init = null;
-                  }
-              );
-            })
-          ];
-        };
-
         init = {
           action = "restart";
           process = mkDefault "/bin/init";
@@ -668,6 +650,7 @@ in
         "BLK_DEV_LOOP"
         "EPOLL"
         "EROFS_FS"
+        "EROFS_FS_BACKED_BY_FILE"
         "EROFS_FS_ZIP_LZMA"
         "FUTEX"
         "OVERLAY_FS"
@@ -688,24 +671,45 @@ in
       system.build.etc = pkgs.runCommand "mixos-etc" { } (
         "mkdir -p $out"
         + concatLines (
-          mapAttrsToList (
-            pathUnderEtc:
-            { source }:
-            ''
-              mkdir -p $(dirname $out/etc/${pathUnderEtc})
-              ln -sf ${source} $out/etc/${pathUnderEtc}
-            ''
-          ) config.etc
+          flatten (
+            mapAttrsToList (
+              pathUnderEtc:
+              { source, mode }:
+              [ "mkdir -p $(dirname $out/${pathUnderEtc})" ]
+              ++ [
+                (
+                  if mode != null then
+                    "install -vm${mode} ${source} $out/${pathUnderEtc} "
+                  else
+                    "ln -svf ${source} $out/${pathUnderEtc} "
+                )
+              ]
+            ) config.etc
+          )
         )
       );
 
-      system.build.root = checkAssertWarn config.assertions config.warnings (
+      system.build.kernelModules = pkgs.buildEnv {
+        name = "mixos-kernel-modules";
+        paths = [ (getOutput "modules" kernelPackage) ] ++ config.boot.extraModulePackages;
+        pathsToLink = [
+          "/etc"
+          "/lib"
+        ];
+        # Regenerate kmod's modules* files. This picks up any out-of-tree
+        # modules that might be included in the configuration.
+        postBuild = optionalString hasModules ''
+          find $out/lib/modules/${kernelPackage.modDirVersion}/ -name 'modules*' -not -name 'modules.builtin*' -not -name 'modules.order' -delete
+          ${getExe' pkgs.buildPackages.kmod "depmod"} -b $out -C $out/etc/depmod.d -a ${kernelPackage.modDirVersion}
+          rm -rf $out/etc
+        '';
+      };
+
+      system.build.usr = checkAssertWarn config.assertions config.warnings (
         pkgs.buildEnv {
-          name = "mixos-root";
+          name = "mixos-usr";
           paths = [
-            # Placed first so that it takes precedence over /etc contents in
-            # derivations further below.
-            config.system.build.etc
+            config.system.build.kernelModules
           ]
           ++ map getBin (
             config.bin
@@ -714,102 +718,86 @@ in
               pkgs.mixos
             ]
           )
-          ++ map pkgs.compressFirmwareXz config.boot.firmware
-          ++ optionals hasModules (
-            [ (getOutput "modules" kernelPackage) ] ++ config.boot.extraModulePackages
-          );
+          ++ map pkgs.compressFirmwareXz config.boot.firmware;
           pathsToLink = [
             "/bin"
-            "/etc"
-            "/lib/firmware"
-            "/lib/modules/${kernelPackage.modDirVersion}"
+            "/sbin"
+            "/lib"
           ];
           ignoreCollisions = true;
-          postBuild = ''
-            # Our root filesystem is read-only, so we must create all top-level
-            # directories for any future mountpoints.
-            mkdir -p $out/{dev,proc,sys,var,tmp,state,root,home,passthru}
-
-            # pid 1
-            ln -sf $out/bin/init $out/init
-
-            # /sbin -> /bin
-            ln -sf $out/bin $out/sbin
-
-            # /tmp is setup as a tmpfs on bootup, symlink it to /run since some
-            # programs want to write there, but all should be ephemeral.
-            ln -sfr $out/tmp $out/run
-
-            # Many pieces of software want to consume /etc/mtab. Systemd (via
-            # tmpfiles) symlinks it to /proc/self/mounts
-            ln -sfr $out/proc/self/mounts $out/etc/mtab
-
-            # Regenerate kmod's modules* files. This picks up any out-of-tree
-            # modules that might be included in the configuration.
-            ${optionalString hasModules ''
-              find $out/lib/modules/${kernelPackage.modDirVersion}/ -name 'modules*' -not -name 'modules.builtin*' -not -name 'modules.order' -delete
-              ${getExe' pkgs.buildPackages.kmod "depmod"} -b $out -C $out/etc/depmod.d -a ${kernelPackage.modDirVersion}
-            ''}
-
-            # Create service directories. We do the work here since it doesn't
-            # work with buildEnv, as that would create symlinks back to
-            # read-only nix store directories, which clashes with runsv.
-            ${concatLines (
-              mapAttrsToList (name: service: ''
-                mkdir -p $out/etc/service/${name}
-                ln -sf ${service.run} $out/etc/service/${name}/run
-              '') (filterAttrs (const (service: service.enable)) config.services)
-            )}
-          '';
         }
       );
 
-      system.build.rootfs = pkgs.callPackage (
+      system.build.initrd = pkgs.callPackage (
         {
+          cpio,
           erofs-utils,
           jq,
-          runCommand,
+          stdenvNoCC,
+          xz,
         }:
-        runCommand "mixos.erofs"
-          {
-            __structuredAttrs = true;
-            unsafeDiscardReferences.out = true;
-            enableParallelBuilding = true;
+        stdenvNoCC.mkDerivation {
+          name = "mixos-initrd";
 
-            exportReferencesGraph.closure = [ config.system.build.root ];
+          __structuredAttrs = true;
+          unsafeDiscardReferences.out = true;
+          enableParallelBuilding = true;
 
-            nativeBuildInputs = [
-              erofs-utils
-              jq
-            ];
-          }
-          ''
-            mkdir rootfs
+          exportReferencesGraph.closure = [
+            config.system.build.usr
+            config.system.build.etc
+          ]
+          ++ optionals config.state.enable [ config.state.init ];
 
-            cp -r ${config.system.build.root}/. rootfs
+          env.manifest = builtins.toJSON {
+            inherit (builtins) storeDir;
+            inherit (config.system.build) usr etc;
+            init = getExe' pkgs.busybox "init";
+            storeFS = "/mixos.erofs";
+            boot = {
+              inherit (config.boot) kernelModules;
+              kernel = listToAttrs (
+                map (option: nameValuePair option (kernelPackage.config.isYes option)) [
+                  "CGROUPS"
+                  "CONFIGFS_FS"
+                  "DEBUG_FS_ALLOW_ALL"
+                  "FTRACE"
+                  "MODULES"
+                  "SECURITY"
+                  "SECURITYFS"
+                  "SHMEM"
+                  "UNIX" # implies CONFIG_NET
+                  "UNIX98_PTYS"
+                ]
+              );
+            };
+            state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
+          };
 
-            mkdir -p rootfs/nix/store
-            for output_path in $(jq -r '.closure[].path' < "$NIX_ATTRS_JSON_FILE"); do
-              cp -r $output_path rootfs/nix/store
+          nativeBuildInputs = [
+            cpio
+            erofs-utils
+            jq
+            xz
+          ];
+
+          buildCommand = ''
+            mkdir -p store initrd $out
+
+            for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do
+              cp -r $output_path store/
             done
+            mkfs.erofs -zlzma -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
 
-            mkfs.erofs -zlzma -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH ''${outputs[out]} rootfs
-          ''
+            install -Dm0755 ${getExe pkgs.mixos} initrd/init
+            install -Dm0755 ${getExe pkgs.pkgsStatic.busybox} initrd/busybox # TODO(jared): remove me
+
+            jq -r '.env.manifest' <"$NIX_ATTRS_JSON_FILE" >initrd/manifest.json
+            install -Dm0644 mixos.erofs initrd/mixos.erofs
+            (cd initrd && find . -print0 | sort -z | cpio --quiet -o -H newc -R +0:+0 --reproducible --null | eval -- xz --check=crc32 --lzma2=dict=512KiB >> "$out/initrd")
+          '';
+        }
       ) { };
-
-      system.build.initrd = pkgs.makeInitrdNG {
-        compressor = "xz";
-        contents = [
-          {
-            source = "${pkgs.mixos}/libexec/mixos-rdinit";
-            target = "/init";
-          }
-          {
-            source = config.system.build.rootfs;
-            target = "/rootfs";
-          }
-        ];
-      };
 
       system.build.all = pkgs.buildEnv {
         name = "mixos-all";

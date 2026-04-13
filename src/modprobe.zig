@@ -1,9 +1,13 @@
 const std = @import("std");
-const Kmod = @import("./kmod.zig");
+const syslog = @import("syslog.zig");
+const Kmod = @import("kmod.zig");
 
 const log = std.log.scoped(.mixos);
 
-pub fn main(args: *std.process.ArgIterator) anyerror!void {
+pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
+    syslog.init(name);
+    defer syslog.deinit();
+
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
 

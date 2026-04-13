@@ -1,3 +1,4 @@
+const log = @import("log.zig");
 const std = @import("std");
 
 const SYSLOG_FACILITY_USER = 1;
@@ -29,12 +30,16 @@ pub fn init() void {
     if (std.fs.cwd().openFile("/dev/kmsg", .{ .mode = .write_only })) |kmsg_file| {
         kmsg = kmsg_file;
     } else |_| {}
+
+    log.setLogger(.kmsg);
 }
 
 pub fn deinit() void {
     if (kmsg) |file| {
         file.close();
     }
+    kmsg = null;
+    log.setLogger(.default);
 }
 
 pub fn logFn(

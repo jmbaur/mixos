@@ -120,19 +120,12 @@ pub fn build(b: *std.Build) void {
         }),
     });
     kmod_log_wrapper.addCSourceFile(.{
-        .file = b.path("src/kmod.c"),
+        .file = b.path("src/kmod-log-wrapper.c"),
     });
-
-    const mixos_rdinit_module = b.createModule(.{
-        .root_source_file = b.path("src/rdinit.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = optimize != .Debug,
-        .link_libc = false,
-    });
+    kmod_log_wrapper.installHeader(b.path("src/kmod-log-wrapper.h"), "kmod-log-wrapper.h");
 
     const mixos_module = b.createModule(.{
-        .root_source_file = b.path("src/mixos.zig"),
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .strip = optimize != .Debug,
@@ -143,16 +136,6 @@ pub fn build(b: *std.Build) void {
     mixos_module.addImport("varlink", varlink_dep.module("varlink"));
     mixos_module.addImport("mixos_varlink", varlink.scanFile(b, varlink_build_dep.artifact("zig-varlink-scanner"), b.path("com.jmbaur.mixos.varlink"), "com-jmbaur-mixos.zig"));
 
-    const mixos_rdinit = b.addExecutable(.{
-        .name = "mixos-rdinit",
-        .root_module = mixos_rdinit_module,
-    });
-
-    const install_rdinit = b.addInstallArtifact(mixos_rdinit, .{
-        .dest_dir = .{ .override = .{ .custom = "libexec" } },
-    });
-    b.default_step.dependOn(&install_rdinit.step);
-
     const mixos = b.addExecutable(.{
         .name = "mixos",
         .root_module = mixos_module,
@@ -160,34 +143,6 @@ pub fn build(b: *std.Build) void {
 
     const mixos_install_artifact = b.addInstallArtifact(mixos, .{});
     b.getInstallStep().dependOn(&mixos_install_artifact.step);
-
-    const mixos_symlinks = b.step("mixos-symlinks", "Create mixos symlinks");
-    mixos_symlinks.dependOn(&mixos_install_artifact.step);
-    b.getInstallStep().dependOn(mixos_symlinks);
-
-    mixos_symlinks.makeFn = struct {
-        const tools = [_][]const u8{"modprobe"};
-
-        fn make(step: *std.Build.Step, _: std.Build.Step.MakeOptions) !void {
-            const builder = step.owner;
-
-            var exe_dir = try std.fs.cwd().openDir(builder.exe_dir, .{});
-            defer exe_dir.close();
-
-            for (tools) |tool| {
-                while (true) {
-                    exe_dir.symLink("mixos", tool, .{}) catch |err| switch (err) {
-                        error.PathAlreadyExists => {
-                            try exe_dir.deleteFile(tool);
-                            continue;
-                        },
-                        else => return err,
-                    };
-                    break;
-                }
-            }
-        }
-    }.make;
 
     const run_cmd = b.addRunArtifact(mixos);
 

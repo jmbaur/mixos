@@ -29,7 +29,8 @@ in
   state = {
     enable = true;
     fsType = "ext2";
-    device = "/dev/vda";
+    source = "/dev/vda";
+    options = [ "debug" ];
     init = pkgs.writeScript "state-init.sh" ''
       #!/bin/sh
       mkfs.ext2 -L mixos-state /dev/vda

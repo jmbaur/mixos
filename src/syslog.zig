@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("log.zig");
 const C = @cImport({
     @cInclude("syslog.h");
 });
@@ -14,10 +15,13 @@ pub fn init(name: []const u8) void {
     std.mem.copyForwards(u8, &name_buf, name);
 
     C.openlog(std.mem.sliceTo(&name_buf, 0), C.LOG_ODELAY | C.LOG_PERROR, C.LOG_USER);
+
+    log.setLogger(.syslog);
 }
 
 pub fn deinit() void {
     C.closelog();
+    log.setLogger(.default);
 }
 
 pub fn logFn(

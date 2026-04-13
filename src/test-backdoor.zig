@@ -1,14 +1,17 @@
-const system = std.os.linux;
 const mixos_varlink = @import("mixos_varlink");
 const posix = std.posix;
-const process = @import("./process.zig");
+const process = @import("process.zig");
 const std = @import("std");
+const syslog = @import("syslog.zig");
+const system = std.os.linux;
 const varlink = @import("varlink");
 const C = @cImport({
     @cInclude("sys/ioctl.h");
     @cInclude("sys/socket.h");
     @cInclude("linux/vm_sockets.h");
 });
+
+pub const logFn = syslog.logFn;
 
 const log = std.log.scoped(.mixos);
 
@@ -237,7 +240,10 @@ fn detectDefaultListenParams() !ListenParam {
     ) catch @compileError("invalid IPv6 address") };
 }
 
-pub fn main(args: *std.process.ArgIterator) anyerror!void {
+pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
+    syslog.init(name);
+    defer syslog.deinit();
+
     var listen_param = try detectDefaultListenParams();
 
     if (try parseKernelCmdline()) |param| {
