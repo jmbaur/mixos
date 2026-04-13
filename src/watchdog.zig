@@ -50,8 +50,7 @@ fn run(
     var watchdog_timeout: u32 = 0;
     _ = system.ioctl(watchdog, C.WDIOC_GETTIMEOUT, @intFromPtr(&watchdog_timeout));
 
-    const timer_timeout = std.math.clamp(watchdog_timeout, 10, 60) / 2;
-    log.debug("pinging watchdog every {} seconds", .{timer_timeout});
+    const timer_timeout: isize = @intCast(std.math.clamp(watchdog_timeout, 10, 60) / 2);
 
     posix.timerfd_settime(
         timer,
