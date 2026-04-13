@@ -318,6 +318,8 @@
             pkgs.nixfmt
             pkgs.ruff
             pkgs.zig_0_15
+            pkgs.statix
+            pkgs.zigimports
           ];
 
           settings = {
@@ -334,9 +336,24 @@
               includes = [ "*.py" ];
             };
 
+            formatter.statix = {
+              command = pkgs.writeShellScript "statix-fix" ''
+                for file in "$@"; do
+                  statix fix "$file"
+                done
+              '';
+              includes = [ "*.nix" ];
+            };
+
             formatter.zig = {
               command = "zig";
               options = [ "fmt" ];
+              includes = [ "*.zig" ];
+            };
+
+            formatter.zigimports = {
+              command = "zigimports";
+              options = [ "--fix" ];
               includes = [ "*.zig" ];
             };
           };

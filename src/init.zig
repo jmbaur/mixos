@@ -375,34 +375,6 @@ inline fn mdevScan(allocator: std.mem.Allocator) !void {
     log.err("mdev failed with exit: {}", .{term});
 }
 
-const mount_options = std.StaticStringMap(u32).initComptime(.{
-    .{ "ro", system.MS.RDONLY },
-    .{ "relatime", system.MS.RELATIME },
-    .{ "nosuid", system.MS.NOSUID },
-    .{ "nodev", system.MS.NODEV },
-    .{ "noexec", system.MS.NOEXEC },
-    .{ "remount", system.MS.REMOUNT },
-    .{ "noatime", system.MS.NOATIME },
-    .{ "bind", system.MS.BIND },
-    .{ "rbind", system.MS.BIND | system.MS.REC },
-    .{ "nodiratime", system.MS.NODIRATIME },
-    .{ "sync", system.MS.SYNCHRONOUS },
-    .{ "dirsync", system.MS.DIRSYNC },
-    .{ "lazytime", system.MS.LAZYTIME },
-    .{ "strictatime", system.MS.STRICTATIME },
-    .{ "mand", system.MS.MANDLOCK },
-    .{ "private", system.MS.PRIVATE },
-    .{ "rprivate", system.MS.PRIVATE | system.MS.REC },
-    .{ "slave", system.MS.SLAVE },
-    .{ "rslave", system.MS.SLAVE | system.MS.REC },
-    .{ "move", system.MS.MOVE },
-    .{ "shared", system.MS.SHARED },
-    .{ "rshared", system.MS.SHARED | system.MS.REC },
-    .{ "unbindable", system.MS.UNBINDABLE },
-    .{ "runbindable", system.MS.UNBINDABLE | system.MS.REC },
-    .{ "defaults", 0 },
-});
-
 const IndentedWriter = struct {
     start: bool = true,
     indent_size: usize,
