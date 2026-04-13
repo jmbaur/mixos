@@ -219,7 +219,8 @@ in
             };
             mode = mkOption {
               type = types.nullOr types.str;
-              example = null;
+              default = null;
+              example = "0400";
               description = ''
                 Copy file to destination with permissions, or symlink if null.
               '';
