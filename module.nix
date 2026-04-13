@@ -795,7 +795,6 @@ in
             mkfs.erofs -zlzma -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
 
             install -Dm0755 ${getExe pkgs.mixos} initrd/init
-            install -Dm0755 ${getExe pkgs.pkgsStatic.busybox} initrd/busybox # TODO(jared): remove me
 
             jq -r '.env.manifest' <"$NIX_ATTRS_JSON_FILE" >initrd/manifest.json
             install -Dm0644 mixos.erofs initrd/mixos.erofs
