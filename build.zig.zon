@@ -1,6 +1,6 @@
 .{
     .name = .mixos,
-    .version = "1.2.0",
+    .version = "1.2.1",
     .fingerprint = 0x9025926ecf183446,
     .minimum_zig_version = "0.15.2",
     .paths = .{ "build.zig", "build.zig.zon", "com.jmbaur.mixos.varlink", "src" },
