@@ -83,6 +83,14 @@ fn open_tree(fd: posix.fd_t, path: [*:0]const u8, flags: usize) Error!posix.fd_t
     }
 }
 
+fn fspick(fd: posix.fd_t, path: [*:0]const u8, flags: usize) Error!posix.fd_t {
+    const ret = system.syscall3(.fspick, @bitCast(@as(isize, fd)), @intFromPtr(path), flags);
+    switch (system.E.init(ret)) {
+        .SUCCESS => return @intCast(ret),
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
 pub fn move_mount(
     from_fd: posix.fd_t,
     from_path: [*:0]const u8,
@@ -115,6 +123,14 @@ pub fn initTree(dir: std.fs.Dir, path: []const u8) Error!Mount {
     const pathZ: [*:0]const u8 = path_buf[0..path.len :0];
 
     return .{ .fd = .{ .mnt = try open_tree(dir.fd, pathZ, C.OPEN_TREE_CLONE | OPEN_TREE_CLOEXEC) } };
+}
+
+pub fn initPick(dir: std.fs.Dir, path: []const u8) Error!Mount {
+    var path_buf = std.mem.zeroes([std.fs.max_path_bytes]u8);
+    std.mem.copyForwards(u8, &path_buf, path);
+    const pathZ: [*:0]const u8 = path_buf[0..path.len :0];
+
+    return .{ .fd = .{ .fs = try fspick(dir.fd, pathZ, 0) } };
 }
 
 pub fn setSource(self: *Mount, source: []const u8) Error!void {
@@ -194,6 +210,21 @@ pub fn finish(self: *Mount, dest_dir: std.fs.Dir, dest: [*:0]const u8, attrs: us
     self.* = undefined;
 }
 
+pub fn reconfigure(self: *Mount) Error!void {
+    const fsfd = switch (self.fd) {
+        .mnt => {
+            log.warn("{s} not available for mntfd", .{@src().fn_name});
+            return;
+        },
+        .fs => |fsfd| fsfd,
+    };
+    defer posix.close(fsfd);
+
+    try fsconfig(fsfd, C.FSCONFIG_CMD_RECONFIGURE, null, null, 0);
+
+    self.* = undefined;
+}
+
 pub const Options = struct {
     pub const RDONLY = C.MOUNT_ATTR_RDONLY;
     pub const NOSUID = C.MOUNT_ATTR_NOSUID;
@@ -218,3 +249,15 @@ const mount_attrs = std.StaticStringMap(u32).initComptime(.{
     .{ "strictatime", C.MOUNT_ATTR_STRICTATIME },
     .{ "defaults", 0 },
 });
+
+pub fn umount(path: []const u8) Error!void {
+    var path_buf = std.mem.zeroes([std.fs.max_path_bytes]u8);
+    std.mem.copyForwards(u8, &path_buf, path);
+    const pathZ: [*:0]const u8 = path_buf[0..path.len :0];
+    switch (system.E.init(system.umount2(pathZ, system.MNT.FORCE))) {
+        .SUCCESS => {},
+        .INVAL => return Error.InvalidArguments,
+        .NOMEM => return Error.OutOfMemory,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}

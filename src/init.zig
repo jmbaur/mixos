@@ -491,12 +491,7 @@ inline fn initState(allocator: std.mem.Allocator, state: *const StateConfig) !vo
     try state_mount.finish(std.fs.cwd(), "/state", 0);
 }
 
-inline fn setupState(allocator: std.mem.Allocator) !void {
-    _ = allocator;
-
-    var root_dir = try std.fs.cwd().openDir("/", .{});
-    defer root_dir.close();
-
+inline fn setupState(root_dir: std.fs.Dir, lower_etc: []const u8) !void {
     var state_dir = try root_dir.makeOpenPath("state", .{});
     defer state_dir.close();
 
@@ -552,11 +547,16 @@ inline fn setupState(allocator: std.mem.Allocator) !void {
     try std.fs.cwd().makePath("/state/etc/upper");
     try std.fs.cwd().makePath("/state/etc/work");
 
+    try Mount.umount("/etc");
     var etc_overlay = try Mount.init("overlay");
-    try etc_overlay.setOption("lowerdir", "/etc");
+    try etc_overlay.setOption("lowerdir", lower_etc);
     try etc_overlay.setOption("upperdir", "/state/etc/upper");
     try etc_overlay.setOption("workdir", "/state/etc/work");
-    try etc_overlay.finish(std.fs.cwd(), "/etc", 0);
+    try etc_overlay.finish(
+        root_dir,
+        "etc",
+        Mount.Options.NODEV | Mount.Options.NOSUID | Mount.Options.NOEXEC,
+    );
 
     var etc_dir = try root_dir.openDir("etc", .{});
     defer etc_dir.close();
@@ -746,7 +746,7 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
         };
     }
 
-    setupState(allocator) catch |err| {
+    setupState(root_dir, manifest.etc) catch |err| {
         log.err("failed to setup state: {}", .{err});
 
         // If we failed to mount /state, not much else will work. Prevent the
