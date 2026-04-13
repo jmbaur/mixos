@@ -48,7 +48,7 @@
             in
             {
               pname = "mixos";
-              version = "1.1.1";
+              version = "1.1.2";
 
               src = lib.fileset.toSource {
                 root = ./.;
