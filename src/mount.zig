@@ -250,6 +250,23 @@ const mount_attrs = std.StaticStringMap(u32).initComptime(.{
     .{ "defaults", 0 },
 });
 
+pub fn mount(
+    special: [*:0]const u8,
+    dir: [*:0]const u8,
+    fstype: ?[*:0]const u8,
+    flags: u32,
+    data: usize,
+) !void {
+    // TODO(jared): enumerate all possible errors
+    switch (system.E.init(system.mount(special, dir, fstype, flags, data))) {
+        .SUCCESS => {},
+        else => |err| {
+            log.err("failed to mount \"{s}\" on \"{s}\": {s}", .{ special, dir, @tagName(err) });
+            return std.posix.unexpectedErrno(err);
+        },
+    }
+}
+
 pub fn umount(path: []const u8) Error!void {
     var path_buf = std.mem.zeroes([std.fs.max_path_bytes]u8);
     std.mem.copyForwards(u8, &path_buf, path);

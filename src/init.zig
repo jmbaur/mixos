@@ -281,39 +281,43 @@ fn mountPseudoFilesystems(kernel: *const KernelConfig) void {
     }
 
     if (kernel.CONFIGFS_FS) b: {
-        var mnt = Mount.init("configfs") catch break :b;
-        mnt.finish(
-            std.fs.cwd(),
+        Mount.mount(
+            "configfs",
             "/sys/kernel/config",
-            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+            "configfs",
+            system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV,
+            0,
         ) catch break :b;
     }
 
     if (kernel.DEBUG_FS_ALLOW_ALL) b: {
-        var mnt = Mount.init("debugfs") catch break :b;
-        mnt.finish(
-            std.fs.cwd(),
+        Mount.mount(
+            "debugfs",
             "/sys/kernel/debug",
-            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+            "debugfs",
+            system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV,
+            0,
         ) catch break :b;
     }
 
     if (kernel.FTRACE) b: {
-        var mnt = Mount.init("tracefs") catch break :b;
-        mnt.finish(
-            std.fs.cwd(),
+        Mount.mount(
+            "tracefs",
             "/sys/kernel/tracing",
-            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+            "tracefs",
+            system.MS.NOSUID | system.MS.NODEV | system.MS.NOEXEC | system.MS.RELATIME,
+            0,
         ) catch break :b;
     }
 
     // /sys/kernel/security directory only exists if both these KConfig options are enabled, see https://github.com/torvalds/linux/blob/c612261bedd6bbab7109f798715e449c9d20ff2f/security/inode.c#L366
     if (kernel.SECURITY and kernel.SECURITYFS) b: {
-        var mnt = Mount.init("securityfs") catch break :b;
-        mnt.finish(
-            std.fs.cwd(),
+        Mount.mount(
+            "securityfs",
             "/sys/kernel/security",
-            Mount.Options.NOSUID | Mount.Options.NODEV | Mount.Options.NOEXEC,
+            "securityfs",
+            system.MS.NOSUID | system.MS.NODEV | system.MS.NOEXEC | system.MS.RELATIME,
+            0,
         ) catch break :b;
     }
 
