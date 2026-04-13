@@ -692,7 +692,11 @@ in
 
       system.build.kernelModules = pkgs.buildEnv {
         name = "mixos-kernel-modules";
-        paths = [ (getOutput "modules" kernelPackage) ] ++ config.boot.extraModulePackages;
+        paths = [
+          (getOutput "modules" kernelPackage)
+          (pkgs.writeTextDir "lib/modules/${kernelPackage.modDirVersion}/modules.stub" "") # ensure buildEnv doesn't barf if extraModulePackages is empty
+        ]
+        ++ config.boot.extraModulePackages;
         pathsToLink = [
           "/etc"
           "/lib"
