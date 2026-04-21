@@ -4,5 +4,6 @@
 /.direnv
 /.zig-cache
 /zig-out
+/zig-pkg
 __pycache__
 result*
