@@ -19,7 +19,6 @@ let
     getAttr
     groupBy
     hasAttr
-    isFunction
     listToAttrs
     mapAttrs
     ;
@@ -38,19 +37,16 @@ let
     literalExpression
     mapAttrs'
     mapAttrsToList
-    mergeOneOption
     mkBefore
     mkDefault
     mkEnableOption
     mkIf
     mkMerge
     mkOption
-    mkOptionType
     nameValuePair
     optionalString
     optionals
     subtractLists
-    systems
     textClosureMap
     types
     unique
@@ -126,31 +122,9 @@ in
       type = types.listOf types.str;
     };
 
-    nixpkgs = {
-      nixpkgs = mkOption { };
-
-      buildPlatform = mkOption {
-        type = types.either types.str types.attrs;
-      };
-
-      hostPlatform = mkOption {
-        type = types.either types.str types.attrs;
-      };
-
-      config = mkOption {
-        type = types.attrs;
-        default = { };
-      };
-
-      overlays = mkOption {
-        default = [ ];
-        type = types.listOf (mkOptionType {
-          name = "nixpkgs-overlay";
-          description = "nixpkgs overlay";
-          check = isFunction;
-          merge = mergeOneOption;
-        });
-      };
+    nixpkgs.pkgs = mkOption {
+      type = lib.types.pkgs;
+      description = "The pkgs module argument.";
     };
 
     boot = {
@@ -463,6 +437,15 @@ in
     };
 
     mixos = {
+      package = mkOption {
+        type = types.package;
+        default = pkgs.callPackage ./package.nix { };
+        defaultText = "pkgs.mixos";
+        description = ''
+          The mixos package to use.
+        '';
+      };
+
       osRelease = mkOption {
         type = types.submodule {
           freeformType = osReleaseFormat.type;
@@ -473,7 +456,7 @@ in
             };
             VERSION_ID = mkOption {
               type = types.str;
-              default = pkgs.mixos.version;
+              default = config.mixos.package.version;
             };
           };
         };
@@ -489,6 +472,8 @@ in
 
   config = mkMerge [
     {
+      _module.args.pkgs = config.nixpkgs.pkgs;
+
       assertions = [
         (
           let
@@ -530,15 +515,7 @@ in
           }
         )
       ];
-    }
-    {
-      _module.args.pkgs = import config.nixpkgs.nixpkgs {
-        localSystem = systems.elaborate config.nixpkgs.buildPlatform;
-        crossSystem = systems.elaborate config.nixpkgs.hostPlatform;
-        inherit (config.nixpkgs) overlays config;
-      };
-    }
-    {
+
       etc = mkMerge [
         {
           "inittab".source = pkgs.writeText "mixos-inittab" inittab;
@@ -655,7 +632,7 @@ in
         test-backdoor = mkIf config.mixos.testing.enable {
           run = pkgs.writeScript "test-backdoor-run" ''
             #!/bin/sh
-            exec ${getExe pkgs.mixos} test-backdoor
+            exec ${getExe config.mixos.package} test-backdoor
           '';
         };
       };
@@ -735,7 +712,7 @@ in
             config.bin
             ++ [
               pkgs.busybox
-              pkgs.mixos
+              config.mixos.package
             ]
           )
           ++ map pkgs.compressFirmwareXz config.boot.firmware;
@@ -810,7 +787,7 @@ in
             done
             mkfs.erofs -zlzma -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
 
-            install -Dm0755 ${getExe pkgs.mixos} initrd/init
+            install -Dm0755 ${getExe config.mixos.package} initrd/init
 
             jq -r '.env.manifest' <"$NIX_ATTRS_JSON_FILE" >initrd/manifest.json
             install -Dm0644 mixos.erofs initrd/mixos.erofs
