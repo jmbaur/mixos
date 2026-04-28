@@ -43,6 +43,7 @@ let
     mkIf
     mkMerge
     mkOption
+    mkRenamedOptionModule
     nameValuePair
     optionalString
     optionals
@@ -109,6 +110,8 @@ let
     ) "" possibleActions;
 in
 {
+  imports = [ (mkRenamedOptionModule [ "bin" ] [ "packages" ]) ];
+
   options = {
     assertions = mkOption {
       type = types.listOf types.unspecified;
@@ -182,7 +185,7 @@ in
       };
     };
 
-    bin = mkOption {
+    packages = mkOption {
       type = types.listOf types.package;
       default = [ ];
       description = ''
@@ -709,7 +712,7 @@ in
             config.system.build.kernelModules
           ]
           ++ map getBin (
-            config.bin
+            config.packages
             ++ [
               pkgs.busybox
               config.mixos.package
@@ -720,6 +723,7 @@ in
             "/bin"
             "/sbin"
             "/lib"
+            "/share"
           ];
           ignoreCollisions = true;
         }
