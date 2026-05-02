@@ -748,7 +748,9 @@ in
             config.system.build.usr
             config.system.build.etc
           ]
-          ++ optionals config.state.enable [ config.state.init ];
+          ++ optionals (config.state.enable && config.state.init != null) [
+            config.state.init
+          ];
 
           env.manifest = builtins.toJSON {
             inherit (builtins) storeDir;
