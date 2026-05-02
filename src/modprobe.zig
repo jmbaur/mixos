@@ -4,14 +4,11 @@ const Kmod = @import("kmod.zig");
 
 const log = std.log.scoped(.mixos);
 
-pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
+pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.Iterator) anyerror!void {
     syslog.init(name);
     defer syslog.deinit();
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-
-    const allocator = arena.allocator();
+    const allocator = init.arena.allocator();
 
     var kmod = try Kmod.init(allocator);
     defer kmod.deinit();

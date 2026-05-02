@@ -2,7 +2,7 @@
     .name = .mixos,
     .version = "1.3.0",
     .fingerprint = 0x9025926ecf183446,
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     .paths = .{ "build.zig", "build.zig.zon", "com.jmbaur.mixos.varlink", "src" },
     .dependencies = .{
         .kmod = .{
@@ -10,8 +10,8 @@
             .hash = "N-V-__8AACXSEAC4vv9Dh65rS1ICs847KPjvNop6RIHJUDNN",
         },
         .varlink = .{
-            .url = "https://github.com/jmbaur/zig-varlink/archive/883d5f0420061b04ab0d5c980b655be185eba0b5.tar.gz",
-            .hash = "N-V-__8AAIoyAgCSaZMjkoL8IOvRqnouU_QcrBgyfDvPMJJD",
+            .url = "https://github.com/jmbaur/zig-varlink/archive/c083558a083b3f7a23754f57f4fca1962d8e71fe.tar.gz",
+            .hash = "zig_varlink-0.1.0-nZ9B9mYjAgBkwiJroOPIK9QtM3YGd5BABFMI9Jv5hE9U",
         },
     },
 }

@@ -7,36 +7,41 @@ const SYSLOG_FACILITY_USER = 1;
 // https://github.com/torvalds/linux/blob/55027e689933ba2e64f3d245fb1ff185b3e7fc81/kernel/printk/printk.c#L735
 const PRINTKRB_RECORD_MAX = 1024;
 
-var mutex: std.Thread.Mutex = .{};
-var kmsg: ?std.fs.File = null;
+var mutex: std.Io.Mutex = .init;
+var kmsg: ?std.Io.File = null;
+var io_: ?std.Io = null;
 
-// The Zig string formatter can make many individual writes to our
-// writer depending on the format string, so we do all the formatting
-// ahead of time here so we can perform the write all at once when the
-// log line goes to the kernel.
-var log_buf: [PRINTKRB_RECORD_MAX]u8 = undefined;
-var stream = std.io.fixedBufferStream(&log_buf);
+var kmsg_buffer: [PRINTKRB_RECORD_MAX]u8 = undefined;
 
-pub fn init() void {
+pub fn init(io: std.Io) void {
     // disable kmsg rate limit
-    if (std.fs.cwd().openFile(
+    if (std.Io.Dir.cwd().openFile(
+        io,
         "/proc/sys/kernel/printk_devkmsg",
         .{ .mode = .write_only },
     )) |printk_devkmsg| {
-        defer printk_devkmsg.close();
-        printk_devkmsg.writeAll("on\n") catch {};
+        defer printk_devkmsg.close(io);
+        var buf: [3]u8 = undefined;
+        var writer = printk_devkmsg.writer(io, &buf);
+        writer.interface.writeAll("on\n") catch {};
+        writer.interface.flush() catch {};
     } else |_| {}
 
-    if (std.fs.cwd().openFile("/dev/kmsg", .{ .mode = .write_only })) |kmsg_file| {
+    if (std.Io.Dir.cwd().openFile(
+        io,
+        "/dev/kmsg",
+        .{ .mode = .write_only },
+    )) |kmsg_file| {
         kmsg = kmsg_file;
     } else |_| {}
 
+    io_ = io;
     log.setLogger(.kmsg);
 }
 
-pub fn deinit() void {
+pub fn deinit(io: std.Io) void {
     if (kmsg) |file| {
-        file.close();
+        file.close(io);
     }
     kmsg = null;
     log.setLogger(.default);
@@ -48,6 +53,7 @@ pub fn logFn(
     comptime format: []const u8,
     args: anytype,
 ) void {
+    const prefix = if (scope == .default) "" else @tagName(scope) ++ ": ";
     const syslog_prefix = comptime b: {
         var buf: [2]u8 = undefined;
         var fixed_writer: std.Io.Writer = .fixed(&buf);
@@ -82,17 +88,15 @@ pub fn logFn(
         );
     };
 
-    mutex.lock();
-    defer mutex.unlock();
+    const io = io_ orelse return;
 
-    const prefix = if (scope == .default) "" else @tagName(scope) ++ ": ";
+    mutex.lock(io) catch return;
+    defer mutex.unlock(io);
 
-    stream.writer().print(
+    var writer = file.writer(io, &kmsg_buffer);
+    writer.interface.print(
         "<" ++ syslog_prefix ++ ">" ++ prefix ++ format ++ "\n",
         args,
     ) catch {};
-
-    file.writeAll(stream.getWritten()) catch {};
-
-    stream.reset();
+    writer.flush() catch {};
 }

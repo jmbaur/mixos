@@ -95,14 +95,14 @@ const Manifest = struct {
     state: ?StateConfig,
 };
 
-inline fn firstAvailableLoopDevice(allocator: std.mem.Allocator) ![]const u8 {
-    const loop_control = try std.fs.cwd().openFile("/dev/loop-control", .{ .mode = .read_write });
-    defer loop_control.close();
+inline fn firstAvailableLoopDevice(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+    const loop_control = try std.Io.Dir.cwd().openFile(io, "/dev/loop-control", .{ .mode = .read_write });
+    defer loop_control.close(io);
 
     const loop_nr = system.ioctl(loop_control.handle, LOOP_CTL_GET_FREE, 0);
 
     // TODO(jared): enumerate all possible errors
-    switch (system.E.init(loop_nr)) {
+    switch (system.errno(loop_nr)) {
         .SUCCESS => {},
         else => |err| {
             log.err("failed to get next free loopback number: {s}", .{@tagName(err)});
@@ -114,7 +114,7 @@ inline fn firstAvailableLoopDevice(allocator: std.mem.Allocator) ![]const u8 {
 }
 
 fn ftruncate(fd: posix.fd_t, length: i64) !void {
-    switch (system.E.init(system.ftruncate(fd, length))) {
+    switch (system.errno(system.ftruncate(fd, length))) {
         .SUCCESS => {},
         else => |err| return posix.unexpectedErrno(err),
     }
@@ -122,16 +122,16 @@ fn ftruncate(fd: posix.fd_t, length: i64) !void {
 
 fn sendfile(outfd: posix.fd_t, infd: posix.fd_t, offset: ?*i64, count: u64) !usize {
     const ret = system.sendfile(outfd, infd, offset, @intCast(count));
-    switch (system.E.init(ret)) {
+    switch (system.errno(ret)) {
         .SUCCESS => return ret,
         else => |err| return posix.unexpectedErrno(err),
     }
 }
 
-inline fn createStoreLoopback(allocator: std.mem.Allocator, store_fd: posix.fd_t, store_fs_source: []const u8) ![]const u8 {
-    const store_fs = try std.fs.cwd().openFile(store_fs_source, .{});
-    defer store_fs.close();
-    const store_stat = try store_fs.stat();
+inline fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd: posix.fd_t, store_fs_source: []const u8) ![]const u8 {
+    const store_fs = try std.Io.Dir.cwd().openFile(io, store_fs_source, .{});
+    defer store_fs.close(io);
+    const store_stat = try store_fs.stat(io);
 
     try ftruncate(store_fd, @intCast(store_stat.size));
     _ = try sendfile(store_fd, store_fs.handle, null, store_stat.size);
@@ -143,16 +143,16 @@ inline fn createStoreLoopback(allocator: std.mem.Allocator, store_fd: posix.fd_t
         log.warn("failed to add seals to store", .{});
     }
 
-    const loop_device_path = try firstAvailableLoopDevice(allocator);
+    const loop_device_path = try firstAvailableLoopDevice(io, allocator);
     log.debug("using loopback device {s}", .{loop_device_path});
 
-    const loop_device = try std.fs.cwd().openFile(loop_device_path, .{ .mode = .read_write });
-    defer loop_device.close();
+    const loop_device = try std.Io.Dir.cwd().openFile(io, loop_device_path, .{ .mode = .read_write });
+    defer loop_device.close(io);
 
     // We cannot use the fancy erofs feature that allows for skipping loopback device creation, since our erofs
     // https://github.com/gregkh/linux/blob/f2b09e8b594ce61b8ff508ea1fb594b3b24ec6d3/fs/erofs/super.c#L798-L799
     // TODO(jared): enumerate all possible errors
-    switch (system.E.init(system.ioctl(loop_device.handle, LOOP_SET_FD, @intCast(store_fd)))) {
+    switch (system.errno(system.ioctl(loop_device.handle, LOOP_SET_FD, @intCast(store_fd)))) {
         .SUCCESS => {},
         else => |err| {
             log.err("failed to set backing file on loopback device: {s}", .{@tagName(err)});
@@ -164,13 +164,14 @@ inline fn createStoreLoopback(allocator: std.mem.Allocator, store_fd: posix.fd_t
 }
 
 fn mountStore(
+    io: std.Io,
     allocator: std.mem.Allocator,
     store_blockdev: []const u8,
-    mount_dir: std.fs.Dir,
+    mount_dir: std.Io.Dir,
     store_dir: []const u8,
 ) !void {
     const store_dir_relative = std.mem.trimStart(u8, store_dir, std.fs.path.sep_str);
-    try mount_dir.makePath(store_dir_relative);
+    try mount_dir.createDirPath(io, store_dir_relative);
 
     var store = try Mount.init("erofs");
     try store.setSource(store_blockdev);
@@ -184,30 +185,34 @@ fn mountStore(
 
 /// Save memory by removing all initramfs content, excluding sysroot, which we
 /// will switch to eventually.
-fn removeAllContent(dir: std.fs.Dir, directory: []const u8, new_root: std.fs.Dir) void {
-    var old_root = dir.openDir(directory, .{ .iterate = true }) catch return;
-    defer old_root.close();
+fn removeAllContent(io: std.Io, dir: std.Io.Dir, directory: []const u8, new_root: std.Io.Dir) void {
+    var old_root = dir.openDir(io, directory, .{ .iterate = true }) catch return;
+    defer old_root.close(io);
 
-    var old_root_stat: system.Stat = undefined;
-    switch (system.E.init(system.fstat(old_root.fd, &old_root_stat))) {
+    var new_root_statx = std.mem.zeroes(system.Statx);
+    switch (system.errno(system.statx(
+        new_root.handle,
+        ".",
+        0,
+        std.Io.Threaded.linux_statx_request,
+        &new_root_statx,
+    ))) {
         .SUCCESS => {},
-        else => return,
-    }
-
-    var new_root_stat: system.Stat = undefined;
-    switch (system.E.init(system.fstat(new_root.fd, &new_root_stat))) {
-        .SUCCESS => {},
-        else => return,
+        else => |err| {
+            log.err("stat on new root failed: {}", .{err});
+            return;
+        },
     }
 
     var iter = old_root.iterate();
-    while (iter.next() catch return) |entry| {
-        var entry_stat: system.Stat = undefined;
-        switch (system.E.init(system.fstatat(
-            old_root.fd,
+    while (iter.next(io) catch return) |entry| {
+        var entry_statx = std.mem.zeroes(system.Statx);
+        switch (system.errno(system.statx(
+            old_root.handle,
             entry.name[0..entry.name.len :0],
-            &entry_stat,
             0,
+            std.Io.Threaded.linux_statx_request,
+            &entry_statx,
         ))) {
             .SUCCESS => {},
             else => |err| {
@@ -217,11 +222,13 @@ fn removeAllContent(dir: std.fs.Dir, directory: []const u8, new_root: std.fs.Dir
         }
 
         // If the entry is on the new root filesystem, skip it.
-        if (entry_stat.dev == new_root_stat.dev) {
+        if (entry_statx.dev_major == new_root_statx.dev_major and
+            entry_statx.dev_minor == new_root_statx.dev_minor)
+        {
             continue;
         }
 
-        old_root.deleteTree(entry.name) catch |err| {
+        old_root.deleteTree(io, entry.name) catch |err| {
             log.warn("failed to delete {s}: {}", .{ entry.name, err });
             continue;
         };
@@ -229,17 +236,17 @@ fn removeAllContent(dir: std.fs.Dir, directory: []const u8, new_root: std.fs.Dir
 }
 
 /// Returns a handle to the new root directory.
-inline fn switchRoot(root_dir: std.fs.Dir) !void {
-    try root_dir.makePath("sysroot");
+inline fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
+    try root_dir.createDirPath(io, "sysroot");
 
     var tmpfs = try Mount.init("tmpfs");
     try tmpfs.finish(root_dir, "sysroot", Mount.Options.NODEV | Mount.Options.NOSUID);
 
-    var sysroot_dir = try root_dir.openDir("sysroot", .{});
-    defer sysroot_dir.close();
+    var sysroot_dir = try root_dir.openDir(io, "sysroot", .{});
+    defer sysroot_dir.close(io);
 
     // TODO(jared): enumerate all possible errors
-    switch (system.E.init(system.fchdir(sysroot_dir.fd))) {
+    switch (system.errno(system.fchdir(sysroot_dir.handle))) {
         .SUCCESS => {},
         else => |err| {
             log.err("failed to change directory to /sysroot: {s}", .{@tagName(err)});
@@ -249,22 +256,22 @@ inline fn switchRoot(root_dir: std.fs.Dir) !void {
 
     // Create directories that do not yet exist
     inline for (&.{ "dev", "sys", "proc" }) |path| {
-        try sysroot_dir.makePath(path);
+        try sysroot_dir.createDirPath(io, path);
     }
 
     // move pseudofilesystems into final root filesystem
-    try Mount.move_mount(root_dir.fd, "dev", sysroot_dir.fd, "dev", 0);
-    try Mount.move_mount(root_dir.fd, "sys", sysroot_dir.fd, "sys", 0);
-    try Mount.move_mount(root_dir.fd, "proc", sysroot_dir.fd, "proc", 0);
+    try Mount.move_mount(root_dir.handle, "dev", sysroot_dir.handle, "dev", 0);
+    try Mount.move_mount(root_dir.handle, "sys", sysroot_dir.handle, "sys", 0);
+    try Mount.move_mount(root_dir.handle, "proc", sysroot_dir.handle, "proc", 0);
 
     log.debug("removing remnants of initramfs", .{});
-    removeAllContent(std.fs.cwd(), "/", sysroot_dir);
+    removeAllContent(io, std.Io.Dir.cwd(), "/", sysroot_dir);
 
     // overmount current root
-    try Mount.move_mount(sysroot_dir.fd, ".", root_dir.fd, "/", 0);
+    try Mount.move_mount(sysroot_dir.handle, ".", root_dir.handle, "/", 0);
 
     // TODO(jared): enumerate all possible errors
-    switch (system.E.init(system.chroot("."))) {
+    switch (system.errno(system.chroot("."))) {
         .SUCCESS => {},
         else => |err| {
             log.err("failed to chroot: {s}", .{@tagName(err)});
@@ -273,7 +280,7 @@ inline fn switchRoot(root_dir: std.fs.Dir) !void {
     }
 
     // TODO(jared): enumerate all possible errors
-    switch (system.E.init(system.chdir("/"))) {
+    switch (system.errno(system.chdir("/"))) {
         .SUCCESS => {},
         else => |err| {
             log.err("failed to change directory to /: {s}", .{@tagName(err)});
@@ -283,34 +290,35 @@ inline fn switchRoot(root_dir: std.fs.Dir) !void {
 }
 
 inline fn setupRoot(
+    io: std.Io,
     allocator: std.mem.Allocator,
-    root_dir: std.fs.Dir,
+    root_dir: std.Io.Dir,
     manifest: *const Manifest,
     store_blockdev: []const u8,
 ) !void {
     // Create directories that do not yet exist
     inline for (&.{ "usr", "etc", "run", "tmp", "var", "root", "home" }) |path| {
-        try root_dir.makePath(path);
+        try root_dir.createDirPath(io, path);
     }
 
-    try mountStore(allocator, store_blockdev, std.fs.cwd(), manifest.storeDir);
+    try mountStore(io, allocator, store_blockdev, std.Io.Dir.cwd(), manifest.storeDir);
 
-    var usr = try Mount.initTree(std.fs.cwd(), manifest.usr);
+    var usr = try Mount.initTree(std.Io.Dir.cwd(), manifest.usr);
     try usr.finish(root_dir, "usr", 0);
 
     // setup usr-merge
-    root_dir.symLink("usr/bin", "/bin", .{ .is_directory = true }) catch {};
-    root_dir.symLink("usr/sbin", "/sbin", .{ .is_directory = true }) catch {};
-    root_dir.symLink("usr/lib", "/lib", .{ .is_directory = true }) catch {};
+    root_dir.symLink(io, "usr/bin", "/bin", .{ .is_directory = true }) catch {};
+    root_dir.symLink(io, "usr/sbin", "/sbin", .{ .is_directory = true }) catch {};
+    root_dir.symLink(io, "usr/lib", "/lib", .{ .is_directory = true }) catch {};
 }
 
 /// By the point this runs, we already have /sys, /dev, and /proc mounted.
-fn mountPseudoFilesystems(kernel: *const KernelConfig) void {
+fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
     if (kernel.UNIX98_PTYS) b: {
-        std.fs.cwd().makeDir("/dev/pts") catch break :b;
+        std.Io.Dir.cwd().createDirPath(io, "/dev/pts") catch break :b;
         var mnt = Mount.init("devpts") catch break :b;
         mnt.finish(
-            std.fs.cwd(),
+            std.Io.Dir.cwd(),
             "/dev/pts",
             Mount.Options.NOSUID | Mount.Options.NOEXEC,
         ) catch break :b;
@@ -360,16 +368,16 @@ fn mountPseudoFilesystems(kernel: *const KernelConfig) void {
     if (kernel.CGROUPS) b: {
         var mnt = Mount.init("cgroup2") catch break :b;
         mnt.finish(
-            std.fs.cwd(),
+            std.Io.Dir.cwd(),
             "/sys/fs/cgroup",
             Mount.Options.NOEXEC | Mount.Options.NOSUID | Mount.Options.NODEV,
         ) catch break :b;
     }
 
     if (kernel.SHMEM) b: {
-        std.fs.cwd().makeDir("/dev/shm") catch break :b;
+        std.Io.Dir.cwd().createDirPath(io, "/dev/shm") catch break :b;
         var mnt = Mount.init("tmpfs") catch break :b;
-        mnt.finish(std.fs.cwd(), "/dev/shm", Mount.Options.NOSUID | Mount.Options.NODEV) catch break :b;
+        mnt.finish(std.Io.Dir.cwd(), "/dev/shm", Mount.Options.NOSUID | Mount.Options.NODEV) catch break :b;
     }
 }
 
@@ -377,8 +385,8 @@ fn mountPseudoFilesystems(kernel: *const KernelConfig) void {
 /// running mdev (since kmod and mdev have optional configuration files), so we
 /// mount our etc hierarchy ahead of time here.
 inline fn premountEtc(lower_etc: []const u8) !void {
-    var etc = try Mount.initTree(std.fs.cwd(), lower_etc);
-    try etc.finish(std.fs.cwd(), "/etc", 0);
+    var etc = try Mount.initTree(std.Io.Dir.cwd(), lower_etc);
+    try etc.finish(std.Io.Dir.cwd(), "/etc", 0);
 }
 
 /// Load all kernel modules declared in the MixOS configuration.
@@ -397,26 +405,27 @@ inline fn loadModules(allocator: std.mem.Allocator, boot: *const BootConfig) !vo
     }
 }
 
-inline fn mdevScan(allocator: std.mem.Allocator) !void {
-    var child = std.process.Child.init(&.{ "mdev", "-s", "-f" }, allocator);
-    const term = try child.spawnAndWait();
-    switch (term) {
-        .Exited => |code| if (code == 0) return,
+inline fn mdevScan(io: std.Io, allocator: std.mem.Allocator) !void {
+    const result = try std.process.run(allocator, io, .{
+        .argv = &.{ "mdev", "-s", "-f" },
+    });
+    switch (result.term) {
+        .exited => |code| if (code == 0) return,
         else => {},
     }
 
-    log.err("mdev failed with exit: {}", .{term});
+    log.err("mdev failed with exit: {}", .{result.term});
 }
 
 const IndentedWriter = struct {
     start: bool = true,
-    indent_size: usize,
+    indentation: usize,
     inner: std.Io.Writer.Allocating,
     writer: std.Io.Writer,
 
-    fn init(allocator: std.mem.Allocator, indent_size: usize) @This() {
+    fn init(allocator: std.mem.Allocator, opts: struct { indentation: usize }) @This() {
         return .{
-            .indent_size = indent_size,
+            .indentation = opts.indentation,
             .inner = .init(allocator),
             .writer = .{
                 .buffer = &.{},
@@ -444,8 +453,8 @@ const IndentedWriter = struct {
         var n: usize = 0;
         for (data) |bytes| {
             if (self.start) {
-                try self.inner.writer.splatByteAll(' ', self.indent_size);
-                n += self.indent_size;
+                try self.inner.writer.splatByteAll(' ', self.indentation);
+                n += self.indentation;
                 self.start = false;
             }
 
@@ -456,8 +465,8 @@ const IndentedWriter = struct {
                     n += line.len;
                     try self.inner.writer.writeByte('\n');
                     n += 1;
-                    try self.inner.writer.splatByteAll(' ', self.indent_size);
-                    n += self.indent_size;
+                    try self.inner.writer.splatByteAll(' ', self.indentation);
+                    n += self.indentation;
                 }
             } else {
                 try self.inner.writer.writeAll(bytes);
@@ -477,16 +486,21 @@ const IndentedWriter = struct {
     }
 };
 
-inline fn initState(allocator: std.mem.Allocator, state: *const StateConfig) !void {
+inline fn initState(io: std.Io, allocator: std.mem.Allocator, state: *const StateConfig) !void {
     b: {
         if (state.init) |init| {
-            var output: IndentedWriter = .init(allocator, 2);
+            var output: IndentedWriter = .init(allocator, .{ .indentation = 2 });
             defer output.deinit();
 
-            const term = process.run(allocator, &.{init}, .{
-                .stdout_writer = &output.writer,
-                .stderr_writer = &output.writer,
-            }) catch |err| {
+            const term = process.run(
+                io,
+                allocator,
+                &.{init},
+                .{
+                    .stdout_writer = &output.writer,
+                    .stderr_writer = &output.writer,
+                },
+            ) catch |err| {
                 log.err("failed to run state initialization: {}", .{err});
                 return error.StateInit;
             };
@@ -498,7 +512,7 @@ inline fn initState(allocator: std.mem.Allocator, state: *const StateConfig) !vo
             )});
 
             switch (term) {
-                .Exited => |exit_code| switch (exit_code) {
+                .exited => |exit_code| switch (exit_code) {
                     0 => break :b,
                     else => {},
                 },
@@ -527,18 +541,18 @@ inline fn initState(allocator: std.mem.Allocator, state: *const StateConfig) !vo
         };
     }
 
-    try std.fs.cwd().makePath("/state");
-    try state_mount.finish(std.fs.cwd(), "/state", 0);
+    try std.Io.Dir.cwd().createDirPath(io, "/state");
+    try state_mount.finish(std.Io.Dir.cwd(), "/state", 0);
 }
 
-inline fn setupState(root_dir: std.fs.Dir, lower_etc: []const u8) !void {
-    var state_dir = try root_dir.makeOpenPath("state", .{});
-    defer state_dir.close();
+inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !void {
+    var state_dir = try root_dir.createDirPathOpen(io, "state", .{});
+    defer state_dir.close(io);
 
     // Ensure /var, /root, and /home persists data back to /state
     inline for ([_][]const u8{ "var", "root", "home" }) |dir_name| {
         b: {
-            state_dir.makePath(dir_name) catch |err| {
+            state_dir.createDirPath(io, dir_name) catch |err| {
                 log.err("failed to create /state/{s} mount source: {}", .{ dir_name, err });
                 break :b;
             };
@@ -553,29 +567,29 @@ inline fn setupState(root_dir: std.fs.Dir, lower_etc: []const u8) !void {
         }
     }
 
-    var var_dir = root_dir.openDir("var", .{});
+    var var_dir = root_dir.openDir(io, "var", .{});
     if (var_dir) |*dir| {
-        defer dir.close();
+        defer dir.close(io);
 
         // Create /var/empty, useful in many contexts
-        dir.makePath("empty") catch |err| {
+        dir.createDirPath(io, "empty") catch |err| {
             log.err("failed to create /var/empty: {}", .{err});
         };
 
         // Symlink /var/run to /run, which is a common symlink that is expected to
         // exist by many tools. We cannot do this at build time since var is tied
         // to /state, which is mounted at runtime.
-        dir.symLink("../run", "run", .{ .is_directory = true }) catch |err| {
+        dir.symLink(io, "../run", "run", .{ .is_directory = true }) catch |err| {
             log.err("failed to symlink /var/run to /run: {}", .{err});
         };
 
         // Ensure basic state directories exist
         {
-            dir.makePath("log") catch |err| {
+            dir.createDirPath(io, "log") catch |err| {
                 log.err("failed to create /var/log: {}", .{err});
             };
 
-            dir.makePath("spool/cron/crontabs") catch |err| {
+            dir.createDirPath(io, "spool/cron/crontabs") catch |err| {
                 log.err("failed to create /var/spool/cron/crontabs: {}", .{err});
             };
         }
@@ -584,8 +598,8 @@ inline fn setupState(root_dir: std.fs.Dir, lower_etc: []const u8) !void {
     }
 
     // Ensure /etc is writeable, needed by various programs.
-    try std.fs.cwd().makePath("/state/etc/upper");
-    try std.fs.cwd().makePath("/state/etc/work");
+    try std.Io.Dir.cwd().createDirPath(io, "/state/etc/upper");
+    try std.Io.Dir.cwd().createDirPath(io, "/state/etc/work");
 
     try Mount.umount("/etc");
     var etc_overlay = try Mount.init("overlay");
@@ -598,12 +612,12 @@ inline fn setupState(root_dir: std.fs.Dir, lower_etc: []const u8) !void {
         Mount.Options.NODEV | Mount.Options.NOSUID | Mount.Options.NOEXEC,
     );
 
-    var etc_dir = try root_dir.openDir("etc", .{});
-    defer etc_dir.close();
+    var etc_dir = try root_dir.openDir(io, "etc", .{});
+    defer etc_dir.close(io);
 
     // Many pieces of software want to consume /etc/mtab. Systemd (via
     // tmpfiles) symlinks it to /proc/self/mounts
-    etc_dir.symLink("../proc/self/mounts", "mtab", .{}) catch |err| switch (err) {
+    etc_dir.symLink(io, "../proc/self/mounts", "mtab", .{}) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => log.warn("failed to setup /etc/mtab: {}", .{err}),
     };
@@ -643,18 +657,19 @@ test extractHostname {
 
 // /etc/hostname is described as a single-line, newline-terminated file
 // containing the hostname of the system, see hostname(5).
-inline fn setupHostname(allocator: std.mem.Allocator) !void {
-    const hostname_file = std.fs.cwd().openFile("/etc/hostname", .{}) catch |err| switch (err) {
+inline fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
+    const hostname_file = std.Io.Dir.cwd().openFile(io, "/etc/hostname", .{}) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
     };
-    defer hostname_file.close();
+    defer hostname_file.close(io);
 
-    const hostname_contents = try hostname_file.readToEndAlloc(allocator, std.math.maxInt(usize));
+    var hostname_reader = hostname_file.reader(io, &.{});
+    const hostname_contents = try hostname_reader.interface.allocRemaining(allocator, .unlimited);
     defer allocator.free(hostname_contents);
 
     if (extractHostname(hostname_contents)) |hostname| {
-        switch (system.E.init(sethostname(hostname))) {
+        switch (system.errno(sethostname(hostname))) {
             .SUCCESS => return,
             else => |err| return posix.unexpectedErrno(err),
         }
@@ -667,17 +682,17 @@ inline fn setupNetworking(kernel: *const KernelConfig) !void {
     }
 
     // TODO(jared): netlink is nicer
-    const fd = try posix.socket(
-        posix.AF.INET,
-        posix.SOCK.DGRAM,
-        posix.IPPROTO.IP,
-    );
-    defer posix.close(fd);
+    const fd: posix.fd_t = @intCast(system.socket(
+        system.AF.INET,
+        system.SOCK.DGRAM,
+        system.IPPROTO.IP,
+    ));
+    defer _ = system.close(fd);
 
     {
         var ifr = std.mem.zeroes(system.ifreq);
         std.mem.copyForwards(u8, &ifr.ifrn.name, "lo");
-        switch (system.E.init(system.ioctl(
+        switch (system.errno(system.ioctl(
             fd,
             system.SIOCGIFFLAGS,
             @intFromPtr(&ifr),
@@ -688,7 +703,7 @@ inline fn setupNetworking(kernel: *const KernelConfig) !void {
 
         ifr.ifru.flags.UP = true;
 
-        switch (system.E.init(system.ioctl(
+        switch (system.errno(system.ioctl(
             fd,
             system.SIOCSIFFLAGS,
             @intFromPtr(&ifr),
@@ -702,30 +717,31 @@ inline fn setupNetworking(kernel: *const KernelConfig) !void {
 // TODO(jared): enumerate all possible errors
 fn memfd_create(name: [*:0]const u8, flags: u32) !posix.fd_t {
     const ret = system.memfd_create(name, flags);
-    switch (system.E.init(ret)) {
+    switch (system.errno(ret)) {
         .SUCCESS => return @intCast(ret),
         else => |err| return posix.unexpectedErrno(err),
     }
 }
 
-fn setupWatchdog(watchdog: *const WatchdogConfig) !?Watchdog {
+fn setupWatchdog(io: std.Io, watchdog: *const WatchdogConfig) !?Watchdog {
     _ = watchdog;
 
-    return Watchdog.init() catch |err| switch (err) {
+    return Watchdog.init(io) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
 }
 
-fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
+fn setupSystem(
+    io: std.Io,
+    arena: *std.heap.ArenaAllocator,
+    stage2_init_allocator: std.mem.Allocator,
+) ![*:0]const u8 {
     // We create this memfd object as early as possible, mostly so we get the
     // vanity of having a low file descriptor number.
     //
     // NOTE: We don't close the store_fd, since that would deallocate the memfd
     const store_fd = try memfd_create("store", system.MFD.ALLOW_SEALING);
-
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
 
     const allocator = arena.allocator();
 
@@ -734,11 +750,11 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
 
     // pre switch-root
     {
-        var root_dir = try std.fs.cwd().openDir("/", .{});
-        defer root_dir.close();
+        var root_dir = try std.Io.Dir.cwd().openDir(io, "/", .{});
+        defer root_dir.close(io);
 
         inline for (&.{ "dev", "sys", "proc" }) |path| {
-            try root_dir.makePath(path);
+            try root_dir.createDirPath(io, path);
         }
         var devtmpfs = try Mount.init("devtmpfs");
         try devtmpfs.finish(root_dir, "dev", Mount.Options.NOEXEC | Mount.Options.NOSUID);
@@ -749,32 +765,33 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
 
         // We must wait until now to setup the /dev/kmsg logger, since /dev is not
         // mounted until right before this.
-        kmsg.init();
+        kmsg.init(io);
 
-        const manifest_json = try root_dir.openFile("manifest.json", .{});
-        defer manifest_json.close();
+        const manifest_json = try root_dir.openFile(io, "manifest.json", .{});
+        defer manifest_json.close(io);
 
-        const manifest_json_contents = try manifest_json.readToEndAlloc(allocator, std.math.maxInt(usize));
+        var manifest_json_reader = manifest_json.reader(io, &.{});
+        const manifest_json_contents = try manifest_json_reader.interface.allocRemaining(allocator, .unlimited);
         const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_json_contents, .{});
 
         manifest = manifest_.value;
 
-        store_blockdev = try createStoreLoopback(allocator, store_fd, manifest.storeFS);
+        store_blockdev = try createStoreLoopback(io, allocator, store_fd, manifest.storeFS);
 
-        try switchRoot(root_dir);
+        try switchRoot(io, root_dir);
     }
 
-    var root_dir = try std.fs.cwd().openDir("/", .{});
-    defer root_dir.close();
+    var root_dir = try std.Io.Dir.cwd().openDir(io, "/", .{});
+    defer root_dir.close(io);
 
-    defer kmsg.deinit();
+    defer kmsg.deinit(io);
 
-    var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(w) else null;
+    var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(io, w) else null;
     errdefer if (watchdog) |*w| w.deinit();
 
-    try setupRoot(allocator, root_dir, &manifest, store_blockdev);
+    try setupRoot(io, allocator, root_dir, &manifest, store_blockdev);
 
-    mountPseudoFilesystems(&manifest.boot.kernel);
+    mountPseudoFilesystems(io, &manifest.boot.kernel);
 
     premountEtc(manifest.etc) catch |err| {
         log.err("failed to pre-mount /etc: {}", .{err});
@@ -784,15 +801,15 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
         log.err("failed to load modules: {}", .{err});
     };
 
-    mdevScan(allocator) catch |err| {
+    mdevScan(io, allocator) catch |err| {
         log.err("failed to run mdev: {}", .{err});
     };
 
-    if (manifest.state) |state| try initState(allocator, &state);
+    if (manifest.state) |state| try initState(io, allocator, &state);
 
-    try setupState(root_dir, manifest.etc);
+    try setupState(io, root_dir, manifest.etc);
 
-    setupHostname(allocator) catch |err| {
+    setupHostname(io, allocator) catch |err| {
         log.err("failed to set hostname: {}", .{err});
     };
 
@@ -802,12 +819,12 @@ fn setupSystem(init_allocator: std.mem.Allocator) ![*:0]const u8 {
 
     log.debug("executing init {s}", .{manifest.init});
 
-    if (watchdog) |*w| w.disarm();
+    if (watchdog) |*w| w.disarm(io);
 
-    return try init_allocator.dupeZ(u8, manifest.init);
+    return try stage2_init_allocator.dupeZ(u8, manifest.init);
 }
 
-pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
+pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.Iterator) anyerror!void {
     _ = name;
     _ = args;
 
@@ -819,23 +836,28 @@ pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
     var fba_buffer = std.mem.zeroes([std.fs.max_path_bytes]u8);
     var fba: std.heap.FixedBufferAllocator = .init(&fba_buffer);
 
-    const init = setupSystem(fba.allocator()) catch |err| {
+    const stage2_init = setupSystem(
+        init.io,
+        init.arena,
+        fba.allocator(),
+    ) catch |err| {
         std.log.err("system setup failed: {}\n", .{err});
 
-        var futex = std.atomic.Value(u32).init(0);
-        while (true) std.Thread.Futex.wait(&futex, 0);
+        var futex: u32 = 0;
+        while (true) std.Options.debug_io.futexWaitUncancelable(u32, &futex, 0);
+        unreachable;
     };
+    init.arena.deinit();
 
     const argv_buf = try fba.allocator().allocSentinel(?[*:0]const u8, 1, null);
-    argv_buf[0] = init;
+    argv_buf[0] = stage2_init;
 
     comptime std.debug.assert(builtin.link_libc);
-    const err = posix.execvpeZ_expandArg0(
-        .no_expand,
+    const err = system.errno(system.execve(
         argv_buf.ptr[0].?,
         argv_buf.ptr,
-        std.c.environ,
-    );
+        std.process.Environ.empty.block.slice,
+    ));
     log.err("execv PID1 failed: {}", .{err});
     @panic("PANIC");
 }

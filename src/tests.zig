@@ -9,5 +9,6 @@ test {
     _ = @import("process.zig");
     _ = @import("syslog.zig");
     _ = @import("test-backdoor.zig");
+    _ = @import("vsock.zig");
     _ = @import("watchdog.zig");
 }

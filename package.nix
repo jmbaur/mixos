@@ -2,7 +2,7 @@
   lib,
   nukeReferences,
   stdenvNoCC,
-  zig_0_15,
+  zig_0_16,
 }:
 
 # TODO(jared): use zig's setup hook once https://github.com/NixOS/nixpkgs/commit/1dfa28594068cde0031ac471c48da20a18c67cd1 is in a stable release.
@@ -12,7 +12,7 @@ stdenvNoCC.mkDerivation (
     deps = stdenvNoCC.mkDerivation {
       pname = finalAttrs.pname + "-deps";
       inherit (finalAttrs) src version;
-      depsBuildBuild = [ zig_0_15 ];
+      depsBuildBuild = [ zig_0_16 ];
       buildCommand = ''
         export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d)
         runHook unpackPhase
@@ -22,7 +22,7 @@ stdenvNoCC.mkDerivation (
       '';
       outputHashAlgo = null;
       outputHashMode = "recursive";
-      outputHash = "sha256-Sh3vZrYzpXkhvFTFH5RGm5nzwPO2gaSeLrp/k9bKXDs=";
+      outputHash = "sha256-rBzCjrBzAMAlbhDMNN8zFnHpwzdqPyTY2YvF+GBubvA=";
     };
   in
   {
@@ -45,7 +45,7 @@ stdenvNoCC.mkDerivation (
 
     nativeBuildInputs = [
       nukeReferences
-      zig_0_15
+      zig_0_16
     ];
 
     # Prevent zig (or anything else) from being in the runtime closure
