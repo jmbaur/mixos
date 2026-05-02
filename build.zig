@@ -1,5 +1,4 @@
 const std = @import("std");
-
 const varlink = @import("varlink");
 
 pub fn build(b: *std.Build) void {
@@ -13,16 +12,8 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const kmod_dep = b.dependency("kmod", .{});
-    const varlink_build_dep = b.dependency("varlink", .{
-        .target = b.graph.host,
-        .optimize = .Debug,
-    });
-    const varlink_dep = b.dependency("varlink", .{
-        .target = target,
-        .optimize = optimize,
-    });
 
-    var kmod_cflags: std.ArrayList([]const u8) = .{};
+    var kmod_cflags: std.ArrayList([]const u8) = .empty;
     defer kmod_cflags.deinit(b.allocator);
     kmod_cflags.appendSlice(b.allocator, &.{
         "-DENABLE_LOGGING",
@@ -90,7 +81,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    libkmod.addCSourceFiles(.{
+    libkmod.root_module.addCSourceFiles(.{
         .root = kmod_dep.path(""),
         .flags = kmod_cflags.items,
         .files = &.{
@@ -119,10 +110,12 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    kmod_log_wrapper.addCSourceFile(.{
+    kmod_log_wrapper.root_module.addCSourceFile(.{
         .file = b.path("src/kmod-log-wrapper.c"),
     });
     kmod_log_wrapper.installHeader(b.path("src/kmod-log-wrapper.h"), "kmod-log-wrapper.h");
+
+    const varlink_dep = b.dependency("varlink", .{});
 
     const mixos_module = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
@@ -134,7 +127,15 @@ pub fn build(b: *std.Build) void {
     mixos_module.linkLibrary(libkmod);
     mixos_module.linkLibrary(kmod_log_wrapper);
     mixos_module.addImport("varlink", varlink_dep.module("varlink"));
-    mixos_module.addImport("mixos_varlink", varlink.scanFile(b, varlink_build_dep.artifact("zig-varlink-scanner"), b.path("com.jmbaur.mixos.varlink"), "com-jmbaur-mixos.zig"));
+    mixos_module.addImport(
+        "mixos_varlink",
+        varlink.scanFile(
+            b,
+            varlink_dep,
+            b.path("com.jmbaur.mixos.varlink"),
+            "com-jmbaur-mixos.zig",
+        ),
+    );
 
     const mixos = b.addExecutable(.{
         .name = "mixos",

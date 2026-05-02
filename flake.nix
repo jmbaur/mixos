@@ -202,7 +202,7 @@
           packages = with pkgs; [
             (python3.withPackages (p: [ (p.mixos.override { __editable = true; }) ]))
             libvarlink
-            zig_0_15
+            zig_0_16
           ];
           shellHook = ''
             unset ZIG_GLOBAL_CACHE_DIR
@@ -217,7 +217,7 @@
           runtimeInputs = [
             pkgs.nixfmt
             pkgs.ruff
-            pkgs.zig_0_15
+            pkgs.zig_0_16
             pkgs.statix
             pkgs.zigimports
           ];

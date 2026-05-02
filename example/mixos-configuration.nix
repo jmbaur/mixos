@@ -4,7 +4,7 @@ let
   configfile = ./${pkgs.stdenv.hostPlatform.linuxArch}.config;
 in
 {
-  bin = [ pkgs.strace ];
+  packages = [ pkgs.strace ];
 
   mixos = {
     testing.enable = true;
@@ -90,6 +90,8 @@ in
 
   users.foo = {
     uid = 1;
-    gid = 0;
+    gid = 1;
   };
+
+  groups.foo.id = 1;
 }

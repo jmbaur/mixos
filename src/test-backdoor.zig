@@ -1,17 +1,17 @@
-const mixos_varlink = @import("mixos_varlink");
-const posix = std.posix;
-const process = @import("process.zig");
 const std = @import("std");
-const syslog = @import("syslog.zig");
-const system = std.os.linux;
+const posix = std.posix;
+
+const mixos_varlink = @import("mixos_varlink");
 const varlink = @import("varlink");
-const C = @cImport({
-    @cInclude("sys/ioctl.h");
-    @cInclude("sys/socket.h");
-    @cInclude("linux/vm_sockets.h");
-});
+
+const process = @import("process.zig");
+const syslog = @import("syslog.zig");
+const vsock = @import("vsock.zig");
 
 const log = std.log.scoped(.mixos);
+
+const ConnectionData = struct { allocator: std.mem.Allocator, io: std.Io };
+const Connection = varlink.server.Connection(Context, ConnectionData);
 
 const Context = struct {
     pub const vendor = "jmbaur";
@@ -28,12 +28,18 @@ const Context = struct {
         ) !void {
             _ = context;
 
+            const conn_data: ConnectionData = request_context.getData();
+            const io = conn_data.io;
+
             const ready = if (parameters.reboot_type == .kexec) b: {
-                const kexec_loaded = std.fs.cwd().openFile("/sys/kernel/kexec_loaded", .{}) catch break :b false;
-                defer kexec_loaded.close();
-                var buf = [_]u8{0};
-                _ = kexec_loaded.read(&buf) catch break :b false;
-                break :b buf[0] == '1';
+                const kexec_loaded = std.Io.Dir.cwd().openFile(
+                    io,
+                    "/sys/kernel/kexec_loaded",
+                    .{},
+                ) catch break :b false;
+                var reader = kexec_loaded.reader(io, &.{});
+                const byte = reader.interface.takeByte() catch break :b false;
+                break :b byte == '1';
             } else true;
 
             if (!ready) {
@@ -72,14 +78,17 @@ const Context = struct {
                 return try request_context.serializeError(mixos_varlink.CommandFailed{});
             }
 
-            const arena: std.mem.Allocator = request_context.getData();
-            var stdout: std.Io.Writer.Allocating = .init(arena);
+            const conn_data: ConnectionData = request_context.getData();
+            const allocator = conn_data.allocator;
+            const io = conn_data.io;
+
+            var stdout: std.Io.Writer.Allocating = .init(allocator);
             defer stdout.deinit();
 
-            var stderr: std.Io.Writer.Allocating = .init(arena);
+            var stderr: std.Io.Writer.Allocating = .init(allocator);
             defer stderr.deinit();
 
-            const term = process.run(arena, parameters.command, .{
+            const term = process.run(io, allocator, parameters.command, .{
                 .stdout_writer = &stdout.writer,
                 .stderr_writer = &stderr.writer,
                 .timeout = parameters.timeout,
@@ -93,10 +102,10 @@ const Context = struct {
 
             try request_context.serializeResponse(.{
                 .exit_code = switch (term) {
-                    .Exited => |exited| @as(u32, exited),
-                    .Signal => |signal| signal,
-                    .Stopped => |stopped| stopped,
-                    .Unknown => |unknown| unknown,
+                    .exited => |exited| @as(u32, exited),
+                    .signal => |signal| @intFromEnum(signal),
+                    .stopped => |stopped| @intFromEnum(stopped),
+                    .unknown => |unknown| unknown,
                 },
                 .stdout = stdout.written(),
                 .stderr = stderr.written(),
@@ -105,76 +114,16 @@ const Context = struct {
     } = .{},
 };
 
-const Connection = varlink.server.Connection(
-    Context,
-    std.mem.Allocator,
-);
-
-fn handleRequest(
-    arena: std.mem.Allocator,
-    connection: *Connection,
-    reader: anytype,
-    context: *Context,
-) !void {
-    const request = try readMessage(reader);
-    try connection.handleRequest(
-        request,
-        arena,
-        context,
-    );
-}
-
-fn readMessage(reader: *std.Io.Reader) ![]u8 {
-    const res = try reader.takeDelimiterExclusive(0);
-    reader.toss(1);
-    return res;
-}
-
-fn handleConnection(arena: std.mem.Allocator, stream: *std.net.Stream) !void {
-    var read_buffer: [1024]u8 = undefined;
-    var reader = stream.reader(&read_buffer);
-    var context: Context = .{};
-
-    var write_buffer: [1024]u8 = undefined;
-    var writer = stream.writer(&write_buffer);
-    var varlink_connection: Connection = .{
-        .response_writer = &writer.interface,
-        .data = arena,
-    };
-
-    while (true) {
-        handleRequest(
-            arena,
-            &varlink_connection,
-            reader.interface(),
-            &context,
-        ) catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-        try writer.interface.flush();
-    }
-}
-
-fn currentCid() !u32 {
-    var vsock = try std.fs.cwd().openFile("/dev/vsock", .{});
-    defer vsock.close();
-
-    var cid: u32 = undefined;
-    if (0 != system.ioctl(vsock.handle, C.IOCTL_VM_SOCKETS_GET_LOCAL_CID, @intFromPtr(&cid))) {
-        return error.UnknownLocalCid;
-    }
-    return cid;
-}
-
 const ListenParam = union(enum) {
-    address: std.net.Address,
-    vsock: struct { cid: u32, port: u16 },
+    vsock: vsock.Address,
+    unix: std.Io.net.UnixAddress,
+    ip_address: std.Io.net.IpAddress,
 
-    pub fn format(self: @This(), writer: *std.io.Writer) std.io.Writer.Error!void {
+    pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
-            .address => |address| try writer.print("{f}", .{address}),
-            .vsock => |vsock| try writer.print("vsock:{}:{}", .{ vsock.cid, vsock.port }),
+            .vsock => |address| try writer.print("device:/dev/vsock:{}:{}", .{ address.cid, address.port }),
+            .unix => |address| try writer.print("unix:{s}", .{address.path}),
+            .ip_address => |address| try writer.print("tcp:{f}", .{address}),
         }
     }
 
@@ -189,21 +138,20 @@ const ListenParam = union(enum) {
             const port = try std.fmt.parseInt(u16, port_arg, 10);
             return .{ .vsock = .{ .cid = cid, .port = port } };
         } else if (std.mem.startsWith(u8, arg, std.fs.path.sep_str)) {
-            return .{ .address = try std.net.Address.initUnix(arg) };
+            return .{ .unix = try .init(arg) };
         } else {
-            const address = try std.net.Address.parseIpAndPort(arg);
-            return .{ .address = address };
+            return .{ .ip_address = try .parseLiteral(arg) };
         }
     }
 };
 
-fn parseKernelCmdline() !?ListenParam {
+fn parseKernelCmdline(io: std.Io) !?ListenParam {
     var buf: [1024]u8 = undefined;
 
-    var cmdline = try std.fs.cwd().openFile("/proc/cmdline", .{});
-    defer cmdline.close();
+    var cmdline = try std.Io.Dir.cwd().openFile(io, "/proc/cmdline", .{});
+    defer cmdline.close(io);
 
-    var cmdline_reader = cmdline.reader(&buf);
+    var cmdline_reader = cmdline.reader(io, &buf);
 
     while (try cmdline_reader.interface.takeDelimiter(' ')) |entry| {
         var entry_split = std.mem.splitScalar(u8, entry, '=');
@@ -221,10 +169,10 @@ fn parseKernelCmdline() !?ListenParam {
 
 const default_port = 8000;
 
-fn detectDefaultListenParams() !ListenParam {
-    if (std.fs.cwd().access("/dev/vsock", .{})) {
-        if (currentCid()) |cid| {
-            if (cid > C.VMADDR_CID_HOST) {
+fn detectDefaultListenParams(io: std.Io) !ListenParam {
+    if (std.Io.Dir.cwd().access(io, "/dev/vsock", .{})) {
+        if (vsock.currentCid(io)) |cid| {
+            if (cid > vsock.VMADDR_CID_HOST) {
                 return .{ .vsock = .{ .cid = cid, .port = default_port } };
             }
         } else |err| {
@@ -232,19 +180,76 @@ fn detectDefaultListenParams() !ListenParam {
         }
     } else |_| {}
 
-    return .{ .address = comptime std.net.Address.parseIp6(
+    return .{ .ip_address = comptime std.Io.net.IpAddress.parseIp6(
         "::",
         default_port,
     ) catch @compileError("invalid IPv6 address") };
 }
 
-pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
+fn handleRequest(
+    conn_data: ConnectionData,
+    connection: *Connection,
+    reader: anytype,
+    context: *Context,
+) !void {
+    const request = try readMessage(reader);
+    try connection.handleRequest(request, conn_data.allocator, context);
+}
+
+fn readMessage(reader: *std.Io.Reader) ![]u8 {
+    const res = try reader.takeDelimiterExclusive(0);
+    reader.toss(1);
+    return res;
+}
+
+fn handleConnection(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    client: std.Io.net.Stream,
+) !void {
+    defer client.close(io);
+
+    var arena: std.heap.ArenaAllocator = .init(gpa);
+    defer arena.deinit();
+
+    const allocator = arena.allocator();
+
+    var read_buffer: [1024]u8 = undefined;
+    var reader = client.reader(io, &read_buffer);
+    var context: Context = .{};
+
+    var write_buffer: [1024]u8 = undefined;
+    var writer = client.writer(io, &write_buffer);
+    var varlink_connection: Connection = .{
+        .response_writer = &writer.interface,
+        .data = .{ .io = io, .allocator = allocator },
+    };
+
+    while (true) {
+        handleRequest(
+            .{ .io = io, .allocator = allocator },
+            &varlink_connection,
+            &reader.interface,
+            &context,
+        ) catch |err| switch (err) {
+            error.EndOfStream => break,
+            else => return err,
+        };
+        try writer.interface.flush();
+    }
+}
+
+pub fn main(
+    init: std.process.Init,
+    name: []const u8,
+    args: *std.process.Args.Iterator,
+) anyerror!void {
     syslog.init(name);
     defer syslog.deinit();
 
-    var listen_param = try detectDefaultListenParams();
+    var listen_param = try detectDefaultListenParams(init.io);
 
-    if (try parseKernelCmdline()) |param| {
+    if (try parseKernelCmdline(init.io)) |param| {
         listen_param = param;
     }
 
@@ -252,79 +257,25 @@ pub fn main(name: []const u8, args: *std.process.ArgIterator) anyerror!void {
         listen_param = try ListenParam.parse(arg);
     }
 
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
+    const garbage_address = comptime std.Io.net.IpAddress.parseIp6("::", 0) catch @panic("invalid IP address"); // unused
 
-    const sockfd = try posix.socket(
-        switch (listen_param) {
-            .vsock => posix.AF.VSOCK,
-            .address => |address| address.any.family,
+    const socket: std.Io.net.Socket = switch (listen_param) {
+        .vsock => |address| .{ .handle = try address.listen(.{}), .address = garbage_address },
+        .unix => |address| b: {
+            std.Io.Dir.cwd().deleteFile(init.io, address.path) catch {};
+            break :b .{ .handle = try init.io.vtable.netListenUnix(init.io.userdata, &address, .{}), .address = garbage_address };
         },
-        posix.SOCK.STREAM | posix.SOCK.CLOEXEC,
-        switch (listen_param) {
-            .vsock => 0,
-            .address => |address| if (address.any.family == posix.AF.UNIX) 0 else posix.IPPROTO.TCP,
-        },
-    );
-    defer posix.close(sockfd);
-
-    try posix.setsockopt(
-        sockfd,
-        posix.SOL.SOCKET,
-        posix.SO.REUSEADDR,
-        &std.mem.toBytes(@as(c_int, 1)),
-    );
-
-    if (listen_param == .address and listen_param.address.any.family != posix.AF.UNIX and @hasDecl(posix.SO, "REUSEPORT")) {
-        try posix.setsockopt(
-            sockfd,
-            posix.SOL.SOCKET,
-            posix.SO.REUSEPORT,
-            &std.mem.toBytes(@as(c_int, 1)),
-        );
-    }
-
-    switch (listen_param) {
-        .vsock => |vsock| {
-            try std.posix.bind(sockfd, @ptrCast(&std.posix.sockaddr.vm{
-                .cid = vsock.cid,
-                .port = @as(u32, vsock.port),
-                .flags = 0,
-            }), @sizeOf(std.posix.sockaddr.vm));
-        },
-        .address => |address| {
-            if (address.any.family == posix.AF.UNIX) {
-                try std.fs.cwd().deleteFileZ(
-                    address.un.path[0 .. address.un.path.len - 1 :0],
-                );
-            }
-            try std.posix.bind(sockfd, &address.any, address.getOsSockLen());
-        },
-    }
-
-    try std.posix.listen(sockfd, 1);
+        .ip_address => |address| try init.io.vtable.netListenIp(init.io.userdata, &address, .{ .reuse_address = true }),
+    };
+    var server: std.Io.net.Server = .{ .socket = socket, .options = void{} };
+    defer server.deinit(init.io);
 
     log.info("server listening on {f}", .{listen_param});
 
     while (true) {
-        defer {
-            _ = arena.reset(.retain_capacity);
-        }
-
-        var client_addr: std.posix.sockaddr = undefined;
-        var addr_size: std.posix.socklen_t = @sizeOf(@TypeOf(client_addr));
-        var stream: std.net.Stream = .{ .handle = try std.posix.accept(
-            sockfd,
-            @ptrCast(&client_addr),
-            &addr_size,
-            std.posix.SOCK.CLOEXEC,
-        ) };
-        defer stream.close();
-
-        log.debug("connection started", .{});
-        handleConnection(arena.allocator(), &stream) catch |err| {
-            log.err("connection handling failed: {}", .{err});
+        const stream = try server.accept(init.io);
+        _ = init.io.concurrent(handleConnection, .{ init.io, init.gpa, stream }) catch |err| {
+            log.err("failed to dispatch task for connection: {}", .{err});
         };
-        log.debug("connection ended", .{});
     }
 }
