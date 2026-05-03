@@ -585,8 +585,8 @@ inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !v
 
         // Ensure basic state directories exist
         {
-            dir.createDirPath(io, "lib") catch |err| {
-                log.err("failed to create /var/lib: {}", .{err});
+            dir.createDirPath(io, "lib/misc") catch |err| {
+                log.err("failed to create /var/lib/misc: {}", .{err});
             };
 
             dir.createDirPath(io, "log") catch |err| {
