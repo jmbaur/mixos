@@ -579,8 +579,9 @@ inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !v
         // Symlink /var/run to /run, which is a common symlink that is expected to
         // exist by many tools. We cannot do this at build time since var is tied
         // to /state, which is mounted at runtime.
-        dir.symLink(io, "../run", "run", .{ .is_directory = true }) catch |err| {
-            log.err("failed to symlink /var/run to /run: {}", .{err});
+        dir.symLink(io, "../run", "run", .{ .is_directory = true }) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => log.err("failed to symlink /var/run to /run: {}", .{err}),
         };
 
         // Ensure basic state directories exist
