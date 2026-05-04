@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) void {
         .default_target = .{
             .abi = .musl,
             .cpu_model = .baseline,
+            .os_tag = .linux,
         },
     });
 
