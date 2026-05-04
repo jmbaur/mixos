@@ -33,7 +33,9 @@ in
     options = [ "debug" ];
     init = pkgs.writeScript "state-init.sh" ''
       #!/bin/sh
-      mkfs.ext2 -L mixos-state /dev/vda
+      if ! blkid | grep mixos-state; then
+        mkfs.ext2 -L mixos-state /dev/vda
+      fi
     '';
   };
 
