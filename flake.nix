@@ -180,7 +180,9 @@
                   pkgs.cpio
                 ];
                 text = ''
-                  qemu-img create -f qcow2 mixos.qcow2 1G
+                  if ! [[ -f mixos.qcow2 ]]; then
+                    qemu-img create -f qcow2 mixos.qcow2 1G
+                  fi
                   qemu_opts+=("-drive" "file=mixos.qcow2,if=virtio")
 
                   declare -a qemu_opts
