@@ -389,11 +389,12 @@ in
       enable = mkEnableOption "persistence of state";
       init = mkOption {
         type = types.nullOr types.path;
-        default = null;
-        example = "mkfs.ext4 /dev/sda";
+        example = literalExpression ''pkgs.writeScript "state-init" "mkfs.ext4 /dev/sda"'';
         description = ''
-          Program to initialize state. For example, formatting disks, creating
-          device-mapper devices, etc.
+          Program to initialize state, for example for formatting
+          disks, creating device-mapper devices, etc. This program
+          will run on every boot, thus it should be idempotent if the
+          backing device has already been initialized.
         '';
       };
       fsType = mkOption {
