@@ -135,6 +135,8 @@
               pkgs.pkgsCross.armv7l-hf-multiplatform
               pkgs.pkgsCross.riscv64
               pkgs.pkgsCross.riscv32
+              pkgs.pkgsCross.ppc64
+              pkgs.pkgsCross.mips64el-linux-gnuabi64
             ]
         );
 
