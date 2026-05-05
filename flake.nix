@@ -12,13 +12,15 @@
   outputs =
     inputs:
     let
-      inherit (builtins) mapAttrs;
       inherit (inputs.nixpkgs.lib)
         concatMapStringsSep
         escapeShellArg
         evalModules
         genAttrs
         getExe
+        listToAttrs
+        mapAttrs
+        optionalString
         optionals
         ;
     in
@@ -108,9 +110,35 @@
         ];
       };
 
-      hydraJobs.mixos.x86_64-linux = inputs.self.legacyPackages.x86_64-linux.mixos;
+      hydraJobs =
+        let
+          pkgs = inputs.self.legacyPackages.x86_64-linux;
+        in
+        listToAttrs (
+          map
+            (pkgs: {
+              name =
+                "mixos-"
+                + (
+                  if (pkgs.stdenv.hostPlatform != pkgs.stdenv.buildPlatform) then
+                    "cross-${pkgs.stdenv.hostPlatform.system}"
+                  else
+                    "native"
+                );
+              value = {
+                x86_64-linux = pkgs.mixos;
+              };
+            })
+            [
+              pkgs
+              pkgs.pkgsCross.aarch64-multiplatform
+              pkgs.pkgsCross.armv7l-hf-multiplatform
+              pkgs.pkgsCross.riscv64
+              pkgs.pkgsCross.riscv32
+            ]
+        );
 
-      legacyPackages = genAttrs [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ] (
+      legacyPackages = genAttrs [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
         system:
         import inputs.nixpkgs {
           inherit system;
