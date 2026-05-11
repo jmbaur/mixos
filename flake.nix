@@ -20,7 +20,6 @@
         getExe
         listToAttrs
         mapAttrs
-        optionalString
         optionals
         ;
     in
@@ -148,7 +147,20 @@
         }
       );
 
-      lib.mixosSystem = { modules }: evalModules { modules = [ ./module.nix ] ++ modules; };
+      lib.mixosSystem =
+        {
+          modules,
+          baseModules ? [ ],
+        }:
+        let
+          baseModules' = [ ./module.nix ] ++ baseModules;
+          noUserModulesModule = {
+            _module.args.noUserModules = evalModules { modules = baseModules'; };
+          };
+        in
+        evalModules {
+          modules = baseModules' ++ [ noUserModulesModule ] ++ modules;
+        };
 
       mixosConfigurations.example = inputs.self.lib.mixosSystem {
         modules = [
