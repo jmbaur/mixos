@@ -524,14 +524,6 @@ in
         {
           "inittab".source = pkgs.writeText "mixos-inittab" inittab;
           "mdev.conf".source = pkgs.writeText "mdev.conf" config.mdev.rules;
-          "hosts".source = mkIf (kernelPackage.config.isYes "NET") (
-            mkDefault (
-              pkgs.writeText "etc-hosts" ''
-                127.0.0.1 localhost
-                ::1 localhost
-              ''
-            )
-          );
           "os-release".source = osReleaseFormat.generate "os-release" config.mixos.osRelease;
           "passwd".source = pkgs.writeText "passwd" (
             concatLines (
@@ -563,6 +555,14 @@ in
             )
           );
         }
+        (mkIf (kernelPackage.config.isYes "NET") {
+          "hosts".source = mkDefault (
+            pkgs.writeText "etc-hosts" ''
+              127.0.0.1 localhost
+              ::1 localhost
+            ''
+          );
+        })
         (mapAttrs' (name: service: {
           name = "service/${name}/run";
           value.source = service.run;
