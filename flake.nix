@@ -79,32 +79,6 @@
                   meta.mainProgram = "mixos";
                 }
             ) { };
-            # TODO(jared): Remove when we have https://github.com/NixOS/nixpkgs/pull/502712 in a stable release
-            varlink = pyfinal.callPackage (
-              {
-                buildPythonPackage,
-                fetchFromGitHub,
-                lib,
-                setuptools,
-                setuptools-scm,
-              }:
-              buildPythonPackage {
-                pname = "varlink";
-                version = "32.1.0";
-                pyproject = true;
-                build-system = [
-                  setuptools
-                  setuptools-scm
-                ];
-                src = fetchFromGitHub {
-                  owner = "varlink";
-                  repo = "python";
-                  tag = "32.1.0";
-                  hash = "sha256-cdTQ5OIhyPts3wuiyWZjEv9ItbHRlKbHd0nW0eAnj6s=";
-                };
-                meta.license = lib.licenses.asl20;
-              }
-            ) { };
           })
         ];
       };
