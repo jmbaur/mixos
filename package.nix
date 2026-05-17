@@ -55,7 +55,12 @@ stdenvNoCC.mkDerivation (
       "--color off"
       "-Doptimize=ReleaseSmall"
       "-Dcpu=baseline"
-      "-Dtarget=${stdenvNoCC.hostPlatform.qemuArch}-${stdenvNoCC.hostPlatform.parsed.kernel.name}"
+      "-Dtarget=${
+        {
+          "armv7l-linux" = "arm-linux";
+        }
+        .${stdenvNoCC.hostPlatform.system} or stdenvNoCC.hostPlatform.system
+      }"
     ];
 
     configurePhase = ''
