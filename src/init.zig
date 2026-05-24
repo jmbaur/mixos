@@ -675,6 +675,10 @@ fn setupService(io: std.Io, root_service_dir: std.Io.Dir, service_name: []const 
     var service_dir = try root_service_dir.createDirPathOpen(io, service_name, .{});
     defer service_dir.close(io);
 
+    // The entire point of a declarative config is that we declare
+    // what the state of the running system is, so we unapologetically
+    // replace any runtime changes of the "run" executable with the one
+    // the user declares it should be.
     service_dir.deleteFile(io, "run") catch {};
     try service_dir.symLink(io, run, "run", .{});
 }

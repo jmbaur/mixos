@@ -105,6 +105,8 @@ let
     builtins.foldl' (
       acc: action: if hasAttr action groups then acc + groups.${action} + "\n" else acc
     ) "" possibleActions;
+
+  enabledServices = filterAttrs (const (getAttr "enable")) config.services;
 in
 {
   imports = [ (mkRenamedOptionModule [ "bin" ] [ "packages" ]) ];
@@ -742,7 +744,8 @@ in
           ]
           ++ optionals (config.state.enable && config.state.init != null) [
             config.state.init
-          ];
+          ]
+          ++ mapAttrsToList (const (getAttr "run")) enabledServices;
 
           env.manifest = builtins.toJSON {
             inherit (builtins) storeDir;
@@ -768,11 +771,7 @@ in
               watchdog = if config.boot.watchdog.enable then { } else null;
             };
             state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
-            services = (
-              mapAttrs (const (flip removeAttrs [ "enable" ])) (
-                filterAttrs (const (getAttr "enable")) config.services
-              )
-            );
+            services = mapAttrs (const (flip removeAttrs [ "enable" ])) enabledServices;
           };
 
           nativeBuildInputs = [
