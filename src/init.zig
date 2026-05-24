@@ -93,6 +93,8 @@ const Manifest = struct {
     boot: BootConfig,
 
     state: ?StateConfig,
+
+    services: std.json.Value,
 };
 
 inline fn firstAvailableLoopDevice(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
@@ -628,6 +630,55 @@ inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !v
     };
 }
 
+inline fn setupServices(io: std.Io, services_value: std.json.Value) !void {
+    var root_service_dir = try std.Io.Dir.cwd().createDirPathOpen(io, "/var/service", .{});
+    defer root_service_dir.close(io);
+
+    const services = b: switch (services_value) {
+        .object => |o| break :b o,
+        else => {
+            log.warn("services is not a JSON object, skipping!", .{});
+            return;
+        },
+    };
+
+    var iter = services.iterator();
+    while (iter.next()) |service| {
+        const service_name = service.key_ptr.*;
+        const service_config = b: switch (service.value_ptr.*) {
+            .object => |o| break :b o,
+            else => {
+                log.warn("skipping service '{s}' since service config is not a JSON object", .{service_name});
+                continue;
+            },
+        };
+        const run_value = service_config.get("run") orelse {
+            log.warn("skipping service '{s}' since service config does not contain 'run' field", .{service_name});
+            continue;
+        };
+
+        const run = b: switch (run_value) {
+            .string => |s| break :b s,
+            else => {
+                log.warn("skipping service '{s}' since service config's 'run' is not a string", .{service_name});
+                continue;
+            },
+        };
+
+        setupService(io, root_service_dir, service_name, run) catch |err| {
+            log.err("failed to setup service '{s}': {}", .{ service_name, err });
+        };
+    }
+}
+
+fn setupService(io: std.Io, root_service_dir: std.Io.Dir, service_name: []const u8, run: []const u8) !void {
+    var service_dir = try root_service_dir.createDirPathOpen(io, service_name, .{});
+    defer service_dir.close(io);
+
+    service_dir.deleteFile(io, "run") catch {};
+    try service_dir.symLink(io, run, "run", .{});
+}
+
 fn sethostname(hostname: []const u8) usize {
     return system.syscall2(.sethostname, @intFromPtr(hostname.ptr), hostname.len);
 }
@@ -814,6 +865,8 @@ fn setupSystem(
 
     try setupState(io, root_dir, manifest.etc);
 
+    try setupServices(io, manifest.services);
+
     setupHostname(io, allocator) catch |err| {
         log.err("failed to set hostname: {}", .{err});
     };
@@ -846,8 +899,12 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
         init.arena,
         fba.allocator(),
     ) catch |err| {
-        std.log.err("system setup failed: {}\n", .{err});
+        log.err("system setup failed: {}", .{err});
 
+        // TODO(jared): If we don't have the watchdog enabled, we
+        // should probably not hang indefinitely. If we panic
+        // instead, at least the end user has the chance to pass
+        // panic= to the kernel.
         var futex: u32 = 0;
         while (true) std.Options.debug_io.futexWaitUncancelable(u32, &futex, 0);
         unreachable;

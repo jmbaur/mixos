@@ -9,33 +9,30 @@
 let
   inherit (lib.asserts) checkAssertWarn;
 
-  inherit (builtins)
+  inherit (lib)
     any
     attrNames
     attrValues
-    concatStringsSep
-    elem
-    filter
-    getAttr
-    groupBy
-    hasAttr
-    listToAttrs
-    mapAttrs
-    ;
-
-  inherit (lib)
     concatLines
     concatMapStringsSep
+    concatStringsSep
     const
+    elem
+    filter
     filterAttrs
     flatten
+    flip
+    getAttr
     getBin
     getExe
     getExe'
     getOutput
+    groupBy
+    hasAttr
     id
+    listToAttrs
     literalExpression
-    mapAttrs'
+    mapAttrs
     mapAttrsToList
     mkBefore
     mkDefault
@@ -563,10 +560,6 @@ in
             ''
           );
         })
-        (mapAttrs' (name: service: {
-          name = "service/${name}/run";
-          value.source = service.run;
-        }) (filterAttrs (const (getAttr "enable")) config.services))
       ];
 
       # This mdev rule ensures all devices get their $MODALIAS value modprobed
@@ -613,7 +606,7 @@ in
 
         runsvdir = {
           action = "respawn";
-          process = mkDefault "/bin/runsvdir -P /etc/service";
+          process = mkDefault "/bin/runsvdir -P /var/service";
         };
 
         crond = {
@@ -632,13 +625,11 @@ in
         };
       };
 
-      services = {
-        test-backdoor = mkIf config.mixos.testing.enable {
-          run = pkgs.writeScript "test-backdoor-run" ''
-            #!/bin/sh
-            exec ${getExe config.mixos.package} test-backdoor
-          '';
-        };
+      services.test-backdoor = mkIf config.mixos.testing.enable {
+        run = pkgs.writeScript "test-backdoor-run" ''
+          #!/bin/sh
+          exec ${getExe config.mixos.package} test-backdoor
+        '';
       };
     }
     {
@@ -777,6 +768,11 @@ in
               watchdog = if config.boot.watchdog.enable then { } else null;
             };
             state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
+            services = (
+              mapAttrs (const (flip removeAttrs [ "enable" ])) (
+                filterAttrs (const (getAttr "enable")) config.services
+              )
+            );
           };
 
           nativeBuildInputs = [
