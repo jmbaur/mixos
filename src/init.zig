@@ -630,8 +630,12 @@ inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !v
     };
 }
 
-inline fn setupServices(io: std.Io, services_value: std.json.Value) !void {
-    var root_service_dir = try std.Io.Dir.cwd().createDirPathOpen(io, "/var/service", .{});
+inline fn setupServices(io: std.Io, allocator: std.mem.Allocator, services_value: std.json.Value) !void {
+    var root_service_dir = try std.Io.Dir.cwd().createDirPathOpen(
+        io,
+        "/var/service",
+        .{ .open_options = .{ .iterate = true } },
+    );
     defer root_service_dir.close(io);
 
     const services = b: switch (services_value) {
@@ -642,6 +646,9 @@ inline fn setupServices(io: std.Io, services_value: std.json.Value) !void {
         },
     };
 
+    var managed_services: std.StringHashMapUnmanaged(void) = .empty;
+
+    // Create mixos managed services.
     var iter = services.iterator();
     while (iter.next()) |service| {
         const service_name = service.key_ptr.*;
@@ -668,12 +675,50 @@ inline fn setupServices(io: std.Io, services_value: std.json.Value) !void {
         setupService(io, root_service_dir, service_name, run) catch |err| {
             log.err("failed to setup service '{s}': {}", .{ service_name, err });
         };
+
+        try managed_services.put(allocator, try allocator.dupe(u8, service_name), void{});
+    }
+
+    // Cleanup mixos managed services that no longer exist.
+    var services_iter = root_service_dir.iterate();
+    outer: while (try services_iter.next(io)) |dir_entry| {
+        if (managed_services.get(dir_entry.name) != null) {
+            // This service is managed, we cannot remove it.
+            continue :outer;
+        }
+
+        var service_dir = root_service_dir.openDir(io, dir_entry.name, .{}) catch |err| {
+            log.err("failed to access service directory for '{s}': {}", .{ dir_entry.name, err });
+            continue;
+        };
+        defer service_dir.close(io);
+
+        if (service_dir.access(
+            io,
+            "mixos",
+            .{},
+        )) {} else |_| {
+            // Skip non-mixos managed services.
+            continue;
+        }
+
+        log.debug("removing old service '{s}'", .{dir_entry.name});
+        root_service_dir.deleteTree(io, dir_entry.name) catch |err| {
+            log.err("failed to remove service '{s}': {}", .{ dir_entry.name, err });
+        };
     }
 }
 
 fn setupService(io: std.Io, root_service_dir: std.Io.Dir, service_name: []const u8, run: []const u8) !void {
     var service_dir = try root_service_dir.createDirPathOpen(io, service_name, .{});
     defer service_dir.close(io);
+
+    // Create an empty "mixos" directory within the service directory.
+    // This is kept empty as of now, but we may want to place
+    // information in here in the future. It also marks this service
+    // as being managed by mixos, not a service created by the
+    // end-user.
+    try service_dir.createDirPath(io, "mixos");
 
     // The entire point of a declarative config is that we declare
     // what the state of the running system is, so we unapologetically
@@ -869,7 +914,7 @@ fn setupSystem(
 
     try setupState(io, root_dir, manifest.etc);
 
-    try setupServices(io, manifest.services);
+    try setupServices(io, allocator, manifest.services);
 
     setupHostname(io, allocator) catch |err| {
         log.err("failed to set hostname: {}", .{err});

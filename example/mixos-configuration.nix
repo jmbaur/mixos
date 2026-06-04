@@ -59,10 +59,10 @@ in
     '';
   };
 
-  init.dhcp = {
-    action = "respawn";
-    process = "/bin/udhcpc -f -S";
-  };
+  services.udhcpc.run = pkgs.writeScript "udhcpc-run" ''
+    #!/bin/sh
+    exec /bin/udhcpc -f -S
+  '';
 
   etc."ntp.conf".source = pkgs.writeText "ntp.conf" ''
     server time.nist.gov
