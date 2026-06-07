@@ -488,16 +488,30 @@ const IndentedWriter = struct {
     }
 };
 
-inline fn initState(io: std.Io, allocator: std.mem.Allocator, state: *const StateConfig) !void {
+inline fn initState(
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+    allocator: std.mem.Allocator,
+    state: *const StateConfig,
+) !void {
     b: {
         if (state.init) |init| {
             var output: IndentedWriter = .init(allocator, .{ .indentation = 2 });
             defer output.deinit();
 
+            var env = try environ_map.clone(allocator);
+            defer env.deinit();
+
+            // This runs before busybox is involved, so PATH is not
+            // set yet. We initialize it to a sane value here.
+            try env.put("PATH", "/sbin:/bin:/usr/sbin:/usr/bin");
+
             const term = process.run(
                 io,
-                allocator,
-                &.{init},
+                .{
+                    .argv = &.{init},
+                    .environ_map = &env,
+                },
                 .{
                     .stdout_writer = &output.writer,
                     .stderr_writer = &output.writer,
@@ -529,7 +543,7 @@ inline fn initState(io: std.Io, allocator: std.mem.Allocator, state: *const Stat
     const fstype = try allocator.dupeZ(u8, state.fsType);
     defer allocator.free(fstype);
 
-    log.debug("mounting state of fstype {s}", .{state.fsType});
+    log.debug("mounting state with fstype {s}", .{state.fsType});
 
     var state_mount = try Mount.init(fstype);
     try state_mount.setSource(state.source);
@@ -838,8 +852,7 @@ fn setupWatchdog(io: std.Io, watchdog: *const WatchdogConfig) !?Watchdog {
 }
 
 fn setupSystem(
-    io: std.Io,
-    arena: *std.heap.ArenaAllocator,
+    init: std.process.Init,
     stage2_init_allocator: std.mem.Allocator,
 ) ![*:0]const u8 {
     // We create this memfd object as early as possible, mostly so we get the
@@ -848,18 +861,18 @@ fn setupSystem(
     // NOTE: We don't close the store_fd, since that would deallocate the memfd
     const store_fd = try memfd_create("store", system.MFD.ALLOW_SEALING);
 
-    const allocator = arena.allocator();
+    const allocator = init.arena.allocator();
 
     var manifest: Manifest = undefined;
     var store_blockdev: []const u8 = undefined;
 
     // pre switch-root
     {
-        var root_dir = try std.Io.Dir.cwd().openDir(io, "/", .{});
-        defer root_dir.close(io);
+        var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
+        defer root_dir.close(init.io);
 
         inline for (&.{ "dev", "sys", "proc" }) |path| {
-            try root_dir.createDirPath(io, path);
+            try root_dir.createDirPath(init.io, path);
         }
         var devtmpfs = try Mount.init("devtmpfs");
         try devtmpfs.finish(root_dir, "dev", Mount.Options.NOEXEC | Mount.Options.NOSUID);
@@ -870,33 +883,33 @@ fn setupSystem(
 
         // We must wait until now to setup the /dev/kmsg logger, since /dev is not
         // mounted until right before this.
-        kmsg.init(io);
+        kmsg.init(init.io);
 
-        const manifest_json = try root_dir.openFile(io, "manifest.json", .{});
-        defer manifest_json.close(io);
+        const manifest_json = try root_dir.openFile(init.io, "manifest.json", .{});
+        defer manifest_json.close(init.io);
 
-        var manifest_json_reader = manifest_json.reader(io, &.{});
+        var manifest_json_reader = manifest_json.reader(init.io, &.{});
         const manifest_json_contents = try manifest_json_reader.interface.allocRemaining(allocator, .unlimited);
         const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_json_contents, .{});
 
         manifest = manifest_.value;
 
-        store_blockdev = try createStoreLoopback(io, allocator, store_fd, manifest.storeFS);
+        store_blockdev = try createStoreLoopback(init.io, allocator, store_fd, manifest.storeFS);
 
-        try switchRoot(io, root_dir);
+        try switchRoot(init.io, root_dir);
     }
 
-    var root_dir = try std.Io.Dir.cwd().openDir(io, "/", .{});
-    defer root_dir.close(io);
+    var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
+    defer root_dir.close(init.io);
 
-    defer kmsg.deinit(io);
+    defer kmsg.deinit(init.io);
 
-    var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(io, w) else null;
+    var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(init.io, w) else null;
     errdefer if (watchdog) |*w| w.deinit();
 
-    try setupRoot(io, allocator, root_dir, &manifest, store_blockdev);
+    try setupRoot(init.io, allocator, root_dir, &manifest, store_blockdev);
 
-    mountPseudoFilesystems(io, &manifest.boot.kernel);
+    mountPseudoFilesystems(init.io, &manifest.boot.kernel);
 
     premountEtc(manifest.etc) catch |err| {
         log.err("failed to pre-mount /etc: {}", .{err});
@@ -906,17 +919,17 @@ fn setupSystem(
         log.err("failed to load modules: {}", .{err});
     };
 
-    mdevScan(io, allocator) catch |err| {
+    mdevScan(init.io, allocator) catch |err| {
         log.err("failed to run mdev: {}", .{err});
     };
 
-    if (manifest.state) |state| try initState(io, allocator, &state);
+    if (manifest.state) |state| try initState(init.io, init.environ_map, allocator, &state);
 
-    try setupState(io, root_dir, manifest.etc);
+    try setupState(init.io, root_dir, manifest.etc);
 
-    try setupServices(io, allocator, manifest.services);
+    try setupServices(init.io, allocator, manifest.services);
 
-    setupHostname(io, allocator) catch |err| {
+    setupHostname(init.io, allocator) catch |err| {
         log.err("failed to set hostname: {}", .{err});
     };
 
@@ -926,7 +939,7 @@ fn setupSystem(
 
     log.debug("executing init {s}", .{manifest.init});
 
-    if (watchdog) |*w| w.disarm(io);
+    if (watchdog) |*w| w.disarm(init.io);
 
     return try stage2_init_allocator.dupeZ(u8, manifest.init);
 }
@@ -944,8 +957,7 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
     var fba: std.heap.FixedBufferAllocator = .init(&fba_buffer);
 
     const stage2_init = setupSystem(
-        init.io,
-        init.arena,
+        init,
         fba.allocator(),
     ) catch |err| {
         log.err("system setup failed: {}", .{err});

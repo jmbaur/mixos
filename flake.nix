@@ -13,14 +13,10 @@
     inputs:
     let
       inherit (inputs.nixpkgs.lib)
-        concatMapStringsSep
-        escapeShellArg
         evalModules
         genAttrs
-        getExe
         listToAttrs
         mapAttrs
-        optionals
         ;
     in
     {
@@ -87,7 +83,34 @@
         let
           pkgs = inputs.self.legacyPackages.x86_64-linux;
         in
-        listToAttrs (
+        {
+          test.x86_64-linux = pkgs.testers.runNixOSTest (
+            { config, ... }:
+            {
+              imports = [ inputs.self.lib.nixosTestModule ];
+              name = "mixos-example-test";
+              mixos.nodes.machine =
+                { pkgs, ... }:
+                {
+                  imports = [ ./testing/example.nix ];
+                  packages = [ pkgs.hello ];
+                };
+              testScript = ''
+                import mixos
+
+                mixos_machines = mixos.create_machines("${config.mixos.driverConfiguration}", create_machine)
+                machine = mixos_machines.get("machine")
+                machine.succeed("hello")
+                machine.fail("helloo")
+                machine.shutdown()
+                machine.wait_for_shutdown()
+                machine.release()
+              '';
+            }
+          );
+
+        }
+        // listToAttrs (
           map
             (pkgs: {
               name =
@@ -121,6 +144,7 @@
         }
       );
 
+      # Used to construct a new MixOS configuration
       lib.mixosSystem =
         {
           modules,
@@ -136,84 +160,8 @@
           modules = baseModules' ++ [ noUserModulesModule ] ++ modules;
         };
 
-      mixosConfigurations.example = inputs.self.lib.mixosSystem {
-        modules = [
-          ./example/mixos-configuration.nix
-          { nixpkgs.pkgs = import inputs.nixpkgs { system = builtins.currentSystem; }; }
-        ];
-      };
-
-      apps = mapAttrs (
-        system: pkgs:
-        let
-          mixosConfig = inputs.self.mixosConfigurations.example;
-          mixosPkgs = mixosConfig._module.args.pkgs;
-          qemuOpts =
-            (
-              {
-                x86_64 = [
-                  "-machine"
-                  "q35"
-                ];
-                arm64 = [
-                  "-machine"
-                  "virt"
-                  "-cpu"
-                  "cortex-a53"
-                ];
-              }
-              .${mixosPkgs.stdenv.hostPlatform.linuxArch} or [ ]
-            )
-            ++ [
-              "-m"
-              "2G"
-              "-nographic"
-              "-device"
-              "vhost-vsock-pci,guest-cid=3"
-              "-device"
-              "i6300esb" # watchdog
-              "-virtfs"
-              "local,path=./,security_model=none,mount_tag=host"
-              "-kernel"
-              "${mixosConfig.config.system.build.all}/kernel"
-              "-initrd"
-              "${mixosConfig.config.system.build.all}/initrd"
-              "-append"
-              "${toString (
-                [ "debug" ] ++ optionals mixosPkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ]
-              )}"
-            ];
-        in
-        {
-          default = {
-            type = "app";
-            meta.description = "Launch MixOS in a VM";
-            program = getExe (
-              pkgs.writeShellApplication {
-                name = "mixos-test";
-                runtimeInputs = [
-                  pkgs.qemu
-                  pkgs.cpio
-                ];
-                text = ''
-                  if ! [[ -f mixos.qcow2 ]]; then
-                    qemu-img create -f qcow2 mixos.qcow2 1G
-                  fi
-                  qemu_opts+=("-drive" "file=mixos.qcow2,if=virtio")
-
-                  declare -a qemu_opts
-                  if [[ -c /dev/kvm ]]; then
-                    qemu_opts+=("-enable-kvm")
-                  fi
-
-                  qemu_opts+=(${concatMapStringsSep " " escapeShellArg qemuOpts})
-                  qemu-system-${mixosPkgs.stdenv.hostPlatform.qemuArch} "''${qemu_opts[@]}"
-                '';
-              }
-            );
-          };
-        }
-      ) inputs.self.legacyPackages;
+      # Used with the NixOS VM testing framework
+      lib.nixosTestModule.imports = [ (import ./testing/module.nix inputs.self.lib.mixosSystem) ];
 
       devShells = mapAttrs (_: pkgs: {
         default = pkgs.mkShell {

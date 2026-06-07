@@ -798,8 +798,8 @@ in
         }
       ) { };
 
-      system.build.all = pkgs.buildEnv {
-        name = "mixos-all";
+      system.build.toplevel = pkgs.buildEnv {
+        name = "mixos-toplevel";
         paths = [
           kernelPackage
           config.system.build.initrd

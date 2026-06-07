@@ -88,7 +88,9 @@ const Context = struct {
             var stderr: std.Io.Writer.Allocating = .init(allocator);
             defer stderr.deinit();
 
-            const term = process.run(io, allocator, parameters.command, .{
+            const term = process.run(io, .{
+                .argv = parameters.command,
+            }, .{
                 .stdout_writer = &stdout.writer,
                 .stderr_writer = &stderr.writer,
                 .timeout = parameters.timeout,

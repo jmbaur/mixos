@@ -53,13 +53,11 @@ fn runChild(
 
         _ = posix.system.dup2(stdin, posix.STDIN_FILENO);
         _ = posix.system.dup2(stdout, posix.STDOUT_FILENO);
-        _ = stderr;
-        // _ = posix.system.dup2(stderr, posix.STDERR_FILENO);
+        _ = posix.system.dup2(stderr, posix.STDERR_FILENO);
 
         break :child io.vtable.processReplace(io.userdata, opts);
     };
 
-    std.debug.print("HERE {}\n", .{err});
     const err_int = @intFromError(err);
     var err_buf: [@sizeOf(@TypeOf(err_int))]u8 = undefined;
     std.mem.writeInt(@TypeOf(err_int), &err_buf, err_int, .little);
@@ -219,8 +217,7 @@ const CallbackArgs = struct {
 
 pub fn run(
     io: std.Io,
-    arena: std.mem.Allocator,
-    argv: []const []const u8,
+    replace_opts: std.process.ReplaceOptions,
     opts: struct {
         stdout_writer: *std.Io.Writer,
         stderr_writer: *std.Io.Writer,
@@ -228,7 +225,6 @@ pub fn run(
         timeout: ?i64 = null,
     },
 ) !std.process.Child.Term {
-    _ = arena; // autofix
     const epoll: posix.fd_t = @intCast(posix.system.epoll_create1(C.EPOLL_CLOEXEC));
     defer _ = posix.system.close(epoll);
 
@@ -270,7 +266,7 @@ pub fn run(
             dev_null.handle,
             stdout_pipe[1],
             if (stderr_pipe) |pipe| pipe[1] else stdout_pipe[1],
-            .{ .argv = argv },
+            replace_opts,
         ),
         else => |pid| {
             const pidfd = try pidfd_open(@intCast(pid), 0);
@@ -397,8 +393,7 @@ test run {
         // TODO(jared): skip test if any kernel features we use here aren't available (EPOLL/TIMERFD/etc)
         try std.testing.expectError(error.Timeout, run(
             std.testing.io,
-            arena.allocator(),
-            &.{ "sleep", "2" },
+            .{ .argv = &.{ "sleep", "2" } },
             .{
                 .stdout_writer = &output.writer,
                 .stderr_writer = &output.writer,

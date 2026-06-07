@@ -1,6 +1,6 @@
 from argparse import ArgumentParser, REMAINDER
 from enum import Enum
-import logging
+import json
 import logging
 import os
 import socket
@@ -151,3 +151,12 @@ def cli():
         case _:
             parser.print_usage()
             exit(1)
+
+
+def create_machines(driver_config_json: str, create_machine):
+    with open(driver_config_json) as driver_config_file:
+        driver_config = json.load(driver_config_file)
+        return {
+            name: create_machine(start, name=name)
+            for name, start in driver_config["nodes"].items()
+        }

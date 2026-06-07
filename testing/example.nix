@@ -1,22 +1,15 @@
-{ config, pkgs, ... }:
-
-let
-  configfile = ./${pkgs.stdenv.hostPlatform.linuxArch}.config;
-in
 {
+  config,
+  pkgs,
+  ...
+}:
+
+{
+  testing.qemu.diskImage = 1024 * 1024 * 1024;
+
   packages = [ pkgs.strace ];
 
-  mixos = {
-    testing.enable = true;
-    osRelease.EXPERIMENT = "test";
-  };
-
-  boot.kernelPackages = pkgs.linuxKernel.packagesFor (
-    pkgs.linuxKernel.manualConfig {
-      inherit (pkgs.linux_6_18) src version;
-      inherit configfile;
-    }
-  );
+  mixos.osRelease.EXPERIMENT = "test";
 
   # Test that out-of-tree kernel module loading works
   boot.extraModulePackages = [ config.boot.kernelPackages.jool ];
@@ -36,26 +29,6 @@ in
       if ! blkid | grep mixos-state; then
         mkfs.ext2 -L mixos-state /dev/vda
       fi
-    '';
-  };
-
-  init.shell = {
-    tty =
-      {
-        arm64 = "ttyAMA0";
-        x86_64 = "ttyS0";
-      }
-      .${pkgs.stdenv.hostPlatform.linuxArch} or "console";
-    action = "askfirst";
-    process = "/bin/sh";
-  };
-
-  init.host-mount = {
-    action = "once";
-    process = pkgs.writeScript "host-mount" ''
-      #!/bin/sh
-      mkdir -p /tmp/host
-      mount -t 9p -o trans=virtio,version=9p2000.L,msize=16384 host /tmp/host
     '';
   };
 
