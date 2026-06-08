@@ -167,7 +167,6 @@
         default = pkgs.mkShell {
           packages = with pkgs; [
             (python3.withPackages (p: [ (p.mixos.override { __editable = true; }) ]))
-            libvarlink
             zig_0_16
           ];
           shellHook = ''
