@@ -123,7 +123,13 @@ pub fn init(io: std.Io) !Watchdog {
 }
 
 pub fn disarm(self: *Watchdog, io: std.Io) void {
-    _ = system.ioctl(self.inner.handle, C.WDIOC_SETOPTIONS, @intFromPtr(&C.WDIOS_DISABLECARD));
+    switch (system.errno(system.ioctl(self.inner.handle, C.WDIOC_SETOPTIONS, @intFromPtr(&C.WDIOS_DISABLECARD)))) {
+        .SUCCESS, .BUSY => {
+            // we get EBUSY if NOWAYOUT is enabled on the watchdog
+        },
+        else => |err| log.err("failed to disable watchdog: {}", .{err}),
+    }
+
     self.inner.close(io);
     self.deinit();
 }
