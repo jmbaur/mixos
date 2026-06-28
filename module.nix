@@ -805,7 +805,11 @@ in
           config.system.build.initrd
         ];
         postBuild = ''
-          ln -sf ${pkgs.stdenv.hostPlatform.linux-kernel.target} $out/kernel
+          ln -sf ${
+            kernelPackage.target
+              # TODO(jared): remove when we no longer support release-26.05
+              or pkgs.stdenv.hostPlatform.linux-kernel.target
+          } $out/kernel
         '';
       };
     }
