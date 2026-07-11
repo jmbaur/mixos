@@ -699,104 +699,104 @@ in
         '';
       };
 
-      system.build.usr = checkAssertWarn config.assertions config.warnings (
-        pkgs.buildEnv {
-          name = "mixos-usr";
-          paths = [
-            config.system.build.kernelModules
+      system.build.usr = pkgs.buildEnv {
+        name = "mixos-usr";
+        paths = [
+          config.system.build.kernelModules
+        ]
+        ++ map getBin (
+          config.packages
+          ++ [
+            pkgs.busybox
+            config.mixos.package
           ]
-          ++ map getBin (
-            config.packages
-            ++ [
-              pkgs.busybox
-              config.mixos.package
+        )
+        ++ map pkgs.compressFirmwareXz config.boot.firmware;
+        pathsToLink = [
+          "/bin"
+          "/sbin"
+          "/lib"
+          "/share"
+        ];
+        ignoreCollisions = true;
+      };
+
+      system.build.initrd = checkAssertWarn config.assertions config.warnings (
+        pkgs.callPackage (
+          {
+            cpio,
+            erofs-utils,
+            jq,
+            stdenvNoCC,
+            xz,
+          }:
+          stdenvNoCC.mkDerivation {
+            name = "mixos-initrd";
+
+            __structuredAttrs = true;
+            unsafeDiscardReferences.out = true;
+            enableParallelBuilding = true;
+
+            exportReferencesGraph.closure = [
+              config.system.build.usr
+              config.system.build.etc
             ]
-          )
-          ++ map pkgs.compressFirmwareXz config.boot.firmware;
-          pathsToLink = [
-            "/bin"
-            "/sbin"
-            "/lib"
-            "/share"
-          ];
-          ignoreCollisions = true;
-        }
-      );
+            ++ optionals (config.state.enable && config.state.init != null) [
+              config.state.init
+            ]
+            ++ mapAttrsToList (const (getAttr "run")) enabledServices;
 
-      system.build.initrd = pkgs.callPackage (
-        {
-          cpio,
-          erofs-utils,
-          jq,
-          stdenvNoCC,
-          xz,
-        }:
-        stdenvNoCC.mkDerivation {
-          name = "mixos-initrd";
-
-          __structuredAttrs = true;
-          unsafeDiscardReferences.out = true;
-          enableParallelBuilding = true;
-
-          exportReferencesGraph.closure = [
-            config.system.build.usr
-            config.system.build.etc
-          ]
-          ++ optionals (config.state.enable && config.state.init != null) [
-            config.state.init
-          ]
-          ++ mapAttrsToList (const (getAttr "run")) enabledServices;
-
-          env.manifest = builtins.toJSON {
-            inherit (builtins) storeDir;
-            inherit (config.system.build) usr etc;
-            init = getExe' pkgs.busybox "init";
-            storeFS = "/mixos.erofs";
-            boot = {
-              inherit (config.boot) kernelModules;
-              kernel = listToAttrs (
-                map (option: nameValuePair option (kernelPackage.config.isYes option)) [
-                  "CGROUPS"
-                  "CONFIGFS_FS"
-                  "DEBUG_FS_ALLOW_ALL"
-                  "FTRACE"
-                  "MODULES"
-                  "SECURITY"
-                  "SECURITYFS"
-                  "SHMEM"
-                  "UNIX" # implies CONFIG_NET
-                  "UNIX98_PTYS"
-                ]
-              );
-              watchdog = if config.boot.watchdog.enable then { } else null;
+            env.manifest = builtins.toJSON {
+              inherit (builtins) storeDir;
+              inherit (config.system.build) usr etc;
+              init = getExe' pkgs.busybox "init";
+              storeFS = "/mixos.erofs";
+              boot = {
+                inherit (config.boot) kernelModules;
+                kernel = listToAttrs (
+                  map (option: nameValuePair option (kernelPackage.config.isYes option)) [
+                    "CGROUPS"
+                    "CONFIGFS_FS"
+                    "DEBUG_FS_ALLOW_ALL"
+                    "FTRACE"
+                    "MODULES"
+                    "SECURITY"
+                    "SECURITYFS"
+                    "SHMEM"
+                    "UNIX" # implies CONFIG_NET
+                    "UNIX98_PTYS"
+                  ]
+                );
+                watchdog = if config.boot.watchdog.enable then { } else null;
+              };
+              state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
+              services = mapAttrs (const (flip removeAttrs [ "enable" ])) enabledServices;
             };
-            state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
-            services = mapAttrs (const (flip removeAttrs [ "enable" ])) enabledServices;
-          };
 
-          nativeBuildInputs = [
-            cpio
-            erofs-utils
-            jq
-            xz
-          ];
+            nativeBuildInputs = [
+              cpio
+              erofs-utils
+              jq
+              xz
+            ];
 
-          buildCommand = ''
-            mkdir -p store initrd $out
+            buildCommand = ''
+              mkdir -p store initrd $out
 
-            for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do
-              cp -r $output_path store/
-            done
-            mkfs.erofs -zlzma -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
+              for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do
+                cp -r $output_path store/
+              done
+              mkfs.erofs -zlzma -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
 
-            install -Dm0755 ${getExe config.mixos.package} initrd/init
+              install -Dm0755 ${getExe config.mixos.package} initrd/init
 
-            jq -r '.env.manifest' <"$NIX_ATTRS_JSON_FILE" >initrd/manifest.json
-            install -Dm0644 mixos.erofs initrd/mixos.erofs
-            (cd initrd && find . -print0 | sort -z | cpio --quiet -o -H newc -R +0:+0 --reproducible --null | eval -- xz --check=crc32 --lzma2=dict=512KiB >> "$out/initrd")
-          '';
-        }
-      ) { };
+              jq -r '.env.manifest' <"$NIX_ATTRS_JSON_FILE" >initrd/manifest.json
+              install -Dm0644 mixos.erofs initrd/mixos.erofs
+              (cd initrd && find . -print0 | sort -z | cpio --quiet -o -H newc -R +0:+0 --reproducible --null | eval -- xz --check=crc32 --lzma2=dict=512KiB >> "$out/initrd")
+            '';
+          }
+        ) { }
+      );
 
       system.build.toplevel = pkgs.buildEnv {
         name = "mixos-toplevel";
