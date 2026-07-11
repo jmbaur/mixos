@@ -1,1 +1,2 @@
 - create library for ergonomic Linux syscall wrappers (removed in zig 0.16)
+- build-time (as opposed to eval-time) kernel configuration checking, which would allow for using nixpkgs kernel derivations directly
