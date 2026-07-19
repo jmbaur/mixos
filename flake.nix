@@ -24,7 +24,6 @@
         mixos = final.callPackage ./package.nix { };
         pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
           (pyfinal: _: {
-            mixos-testing-library = builtins.warn "mixos-testing-library is a deprecated alias, use mixos instead" pyfinal.mixos;
             mixos = pyfinal.callPackage (
               {
                 __editable ? false,
