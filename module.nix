@@ -564,11 +564,20 @@ in
         })
       ];
 
-      # This mdev rule ensures all devices get their $MODALIAS value modprobed
-      # to allow for automatic kernel module loading.
-      mdev.rules = mkBefore ''
-        $MODALIAS=.* 0:0 660 @/bin/mixos modprobe "$MODALIAS"
-      '';
+      mdev.rules = mkBefore (
+        # This mdev rule ensures all devices
+        # get their $MODALIAS value modprobed
+        # to allow for automatic kernel module
+        # loading.
+        ''
+          $MODALIAS=.* 0:0 660 @/bin/mixos modprobe "$MODALIAS"
+        ''
+        # This is needed by many programs (e.g.
+        # nologin) to be world-writeable.
+        + ''
+          null 0:0 666
+        ''
+      );
 
       init = {
         init = {

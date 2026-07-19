@@ -12,11 +12,18 @@
   outputs =
     inputs:
     let
+      inherit (inputs.nixpkgs.lib.attrsets) unionOfDisjoint;
       inherit (inputs.nixpkgs.lib)
+        const
         evalModules
+        flip
         genAttrs
         listToAttrs
         mapAttrs
+        mapAttrs'
+        nameValuePair
+        readDir
+        removeSuffix
         ;
     in
     {
@@ -82,58 +89,47 @@
         let
           pkgs = inputs.self.legacyPackages.x86_64-linux;
         in
-        {
-          test.x86_64-linux = pkgs.testers.runNixOSTest (
-            { config, ... }:
-            {
-              imports = [ inputs.self.lib.nixosTestModule ];
-              name = "mixos-example-test";
-              mixos.nodes.machine =
-                { pkgs, ... }:
-                {
-                  imports = [ ./testing/example.nix ];
-                  packages = [ pkgs.hello ];
+        unionOfDisjoint
+          (mapAttrs' (flip (
+            const (
+              test:
+              nameValuePair "test-${removeSuffix ".nix" test}" {
+                x86_64-linux = pkgs.testers.runNixOSTest {
+                  imports = [
+                    inputs.self.lib.nixosTestModule
+                    ./testing/tests/${test}
+                  ];
                 };
-              testScript = ''
-                import mixos
-
-                mixos_machines = mixos.create_machines("${config.mixos.driverConfiguration}", create_machine)
-                machine = mixos_machines.get("machine")
-                machine.succeed("hello")
-                machine.fail("helloo")
-                machine.shutdown()
-                machine.wait_for_shutdown()
-                machine.release()
-              '';
-            }
+              }
+            )
+          )) (readDir ./testing/tests))
+          (
+            listToAttrs (
+              map
+                (pkgs: {
+                  name =
+                    "mixos-"
+                    + (
+                      if (pkgs.stdenv.hostPlatform != pkgs.stdenv.buildPlatform) then
+                        "cross-${pkgs.stdenv.hostPlatform.system}"
+                      else
+                        "native"
+                    );
+                  value = {
+                    x86_64-linux = pkgs.mixos;
+                  };
+                })
+                [
+                  pkgs
+                  pkgs.pkgsCross.aarch64-multiplatform
+                  pkgs.pkgsCross.armv7l-hf-multiplatform
+                  pkgs.pkgsCross.riscv64
+                  pkgs.pkgsCross.riscv32
+                  pkgs.pkgsCross.ppc64
+                  pkgs.pkgsCross.mips64el-linux-gnuabi64
+                ]
+            )
           );
-
-        }
-        // listToAttrs (
-          map
-            (pkgs: {
-              name =
-                "mixos-"
-                + (
-                  if (pkgs.stdenv.hostPlatform != pkgs.stdenv.buildPlatform) then
-                    "cross-${pkgs.stdenv.hostPlatform.system}"
-                  else
-                    "native"
-                );
-              value = {
-                x86_64-linux = pkgs.mixos;
-              };
-            })
-            [
-              pkgs
-              pkgs.pkgsCross.aarch64-multiplatform
-              pkgs.pkgsCross.armv7l-hf-multiplatform
-              pkgs.pkgsCross.riscv64
-              pkgs.pkgsCross.riscv32
-              pkgs.pkgsCross.ppc64
-              pkgs.pkgsCross.mips64el-linux-gnuabi64
-            ]
-        );
 
       legacyPackages = genAttrs [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
         system:
