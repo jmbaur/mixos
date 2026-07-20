@@ -125,7 +125,7 @@ in
     };
 
     nixpkgs.pkgs = mkOption {
-      type = lib.types.pkgs;
+      type = types.pkgs;
       description = "The pkgs module argument.";
     };
 
