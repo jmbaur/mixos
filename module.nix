@@ -18,7 +18,6 @@ let
     concatStringsSep
     const
     elem
-    filter
     filterAttrs
     flatten
     flip
