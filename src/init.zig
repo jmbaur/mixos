@@ -380,6 +380,11 @@ inline fn loadModules(io: std.Io, allocator: std.mem.Allocator, boot: *const Boo
         // kernel not built with modules support
         return;
     }
+
+    if (boot.kernelModules.len == 0) {
+        return;
+    }
+
     var kmod = try Kmod.init(allocator);
     defer kmod.deinit();
 
