@@ -764,16 +764,8 @@ in
                 inherit (config.boot) kernelModules;
                 kernel = listToAttrs (
                   map (option: nameValuePair option (kernelPackage.config.isYes option)) [
-                    "CGROUPS"
-                    "CONFIGFS_FS"
-                    "DEBUG_FS_ALLOW_ALL"
-                    "FTRACE"
                     "MODULES"
-                    "SECURITY"
-                    "SECURITYFS"
-                    "SHMEM"
                     "UNIX" # implies CONFIG_NET
-                    "UNIX98_PTYS"
                   ]
                 );
                 watchdog = if config.boot.watchdog.enable then { } else null;

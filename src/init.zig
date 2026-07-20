@@ -40,15 +40,7 @@ test findCmdline {
 // TODO(jared): Make this a hashmap of kconfig to bool to allow for easier
 // additions.
 const KernelConfig = struct {
-    CGROUPS: bool,
-    CONFIGFS_FS: bool,
-    DEBUG_FS_ALLOW_ALL: bool,
-    FTRACE: bool,
     MODULES: bool,
-    SECURITY: bool,
-    SECURITYFS: bool,
-    SHMEM: bool,
-    UNIX98_PTYS: bool,
     UNIX: bool,
 };
 
@@ -315,10 +307,10 @@ inline fn setupRoot(
 }
 
 /// By the point this runs, we already have /sys, /dev, and /proc mounted.
-fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
-    if (kernel.UNIX98_PTYS) b: {
-        std.Io.Dir.cwd().createDirPath(io, "/dev/pts") catch break :b;
+fn mountPseudoFilesystems(io: std.Io) void {
+    b: {
         var mnt = Mount.init("devpts") catch break :b;
+        std.Io.Dir.cwd().createDirPath(io, "/dev/pts") catch break :b;
         mnt.finish(
             std.Io.Dir.cwd(),
             "/dev/pts",
@@ -326,7 +318,7 @@ fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
         ) catch break :b;
     }
 
-    if (kernel.CONFIGFS_FS) b: {
+    b: {
         Mount.mount(
             "configfs",
             "/sys/kernel/config",
@@ -336,7 +328,7 @@ fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
         ) catch break :b;
     }
 
-    if (kernel.DEBUG_FS_ALLOW_ALL) b: {
+    b: {
         Mount.mount(
             "debugfs",
             "/sys/kernel/debug",
@@ -346,7 +338,7 @@ fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
         ) catch break :b;
     }
 
-    if (kernel.FTRACE) b: {
+    b: {
         Mount.mount(
             "tracefs",
             "/sys/kernel/tracing",
@@ -356,8 +348,7 @@ fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
         ) catch break :b;
     }
 
-    // /sys/kernel/security directory only exists if both these KConfig options are enabled, see https://github.com/torvalds/linux/blob/c612261bedd6bbab7109f798715e449c9d20ff2f/security/inode.c#L366
-    if (kernel.SECURITY and kernel.SECURITYFS) b: {
+    b: {
         Mount.mount(
             "securityfs",
             "/sys/kernel/security",
@@ -367,7 +358,7 @@ fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
         ) catch break :b;
     }
 
-    if (kernel.CGROUPS) b: {
+    b: {
         var mnt = Mount.init("cgroup2") catch break :b;
         mnt.finish(
             std.Io.Dir.cwd(),
@@ -376,9 +367,9 @@ fn mountPseudoFilesystems(io: std.Io, kernel: *const KernelConfig) void {
         ) catch break :b;
     }
 
-    if (kernel.SHMEM) b: {
-        std.Io.Dir.cwd().createDirPath(io, "/dev/shm") catch break :b;
+    b: {
         var mnt = Mount.init("tmpfs") catch break :b;
+        std.Io.Dir.cwd().createDirPath(io, "/dev/shm") catch break :b;
         mnt.finish(std.Io.Dir.cwd(), "/dev/shm", Mount.Options.NOSUID | Mount.Options.NODEV) catch break :b;
     }
 }
@@ -909,7 +900,7 @@ fn setupSystem(
 
     try setupRoot(init.io, allocator, root_dir, &manifest, store_blockdev);
 
-    mountPseudoFilesystems(init.io, &manifest.boot.kernel);
+    mountPseudoFilesystems(init.io);
 
     premountEtc(manifest.etc) catch |err| {
         log.err("failed to pre-mount /etc: {}", .{err});
