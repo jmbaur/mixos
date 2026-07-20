@@ -660,7 +660,7 @@ in
         "FW_LOADER_COMPRESS_XZ"
       ]
       ++ optionals (kernelPackage.config.isYes "MODULE_COMPRESS") [
-        # This allows us to call finit_module() with the MODULE_INIT_COMPRESSED_FILE flag
+        # This allows kmod to call finit_module() with the MODULE_INIT_COMPRESSED_FILE flag
         "MODULE_DECOMPRESS"
         "MODULE_COMPRESS_XZ"
       ];
