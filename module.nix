@@ -580,35 +580,45 @@ in
           process = mkDefault "/bin/syslogd -n -D";
         };
 
-        klogd = {
-          action = "respawn";
-          process = mkDefault "/bin/klogd -n";
-        };
-
-        mdev = {
-          action = "respawn";
-          process = mkDefault "/bin/mdev -d -f -S";
-        };
-
         runsvdir = {
           action = "respawn";
           process = mkDefault "/bin/runsvdir -P /var/service";
         };
 
-        crond = {
-          action = "respawn";
-          process = mkDefault "/bin/crond -f -S";
-        };
-
-        ntpd = mkIf (any id (map (hasAttr "ntp.conf") options.etc.definitions)) (mkDefault {
-          action = "respawn";
-          process = "/bin/ntpd -n";
-        });
-
         watchdog = mkIf config.boot.watchdog.enable {
           action = "once";
           process = mkDefault "/bin/watchdog -F /dev/watchdog";
         };
+      };
+
+      services.mdev.run = mkDefault (
+        pkgs.writeScript "mdev-run" ''
+          #!/bin/sh
+          exec /bin/mdev -d -f -S
+        ''
+      );
+
+      services.klogd.run = mkDefault (
+        pkgs.writeScript "klogd-run" ''
+          #!/bin/sh
+          exec /bin/mdev -d -f -S
+        ''
+      );
+
+      services.crond.run = mkDefault (
+        pkgs.writeScript "crond-run" ''
+          #!/bin/sh
+          exec /bin/crond -f -S
+        ''
+      );
+
+      services.ntpd = mkIf (any id (map (hasAttr "ntp.conf") options.etc.definitions)) {
+        run = mkDefault (
+          pkgs.writeScript "ntpd-run" ''
+            #!/bin/sh
+            exec /bin/ntpd -n
+          ''
+        );
       };
 
       services.test-backdoor = mkIf config.mixos.testing.enable {
