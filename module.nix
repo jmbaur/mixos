@@ -624,7 +624,6 @@ in
         "EPOLL"
         "EROFS_FS"
         "EROFS_FS_BACKED_BY_FILE"
-        "EROFS_FS_ZIP_LZMA"
         "EVENTFD"
         "FUTEX"
         "OVERLAY_FS"
@@ -764,7 +763,20 @@ in
               for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do
                 cp -r $output_path store/
               done
-              mkfs.erofs -zlzma -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
+
+              declare erofs_zip
+              if kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_LZMA 2>/dev/null; then
+                erofs_zip=lzma
+              elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_ZSTD 2>/dev/null; then
+                erofs_zip=zstd
+              elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_DEFLATE 2>/dev/null; then
+                erofs_zip=deflate
+              else
+                echo "could not detect erofs compression algorithm"
+                exit 1
+              fi
+              echo "Using $erofs_zip for erofs compression"
+              mkfs.erofs -z"$erofs_zip" -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
 
               install -Dm0755 ${getExe config.mixos.package} initrd/init
 
