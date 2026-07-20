@@ -623,7 +623,6 @@ in
         "BLK_DEV_LOOP"
         "EPOLL"
         "EROFS_FS"
-        "EROFS_FS_BACKED_BY_FILE"
         "EVENTFD"
         "FUTEX"
         "OVERLAY_FS"
