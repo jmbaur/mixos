@@ -16,7 +16,7 @@ const Connection = varlink.server.Connection(Context, ConnectionData);
 const Context = struct {
     pub const vendor = "jmbaur";
     pub const product = "mixos";
-    pub const version = "1.4.3";
+    pub const version = "1.5.0";
     pub const url = "http://mixos.jmbaur.com";
     @"com.jmbaur.mixos": struct {
         pub const interface = mixos_varlink;

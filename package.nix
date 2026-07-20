@@ -27,7 +27,7 @@ stdenvNoCC.mkDerivation (
   in
   {
     pname = "mixos";
-    version = "1.4.3";
+    version = "1.5.0";
 
     src = lib.fileset.toSource {
       root = ./.;
