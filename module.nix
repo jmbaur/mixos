@@ -41,7 +41,6 @@ let
     mkMerge
     mkOption
     mkRenamedOptionModule
-    nameValuePair
     optionalString
     optionals
     subtractLists
@@ -762,12 +761,6 @@ in
               storeFS = "/mixos.erofs";
               boot = {
                 inherit (config.boot) kernelModules;
-                kernel = listToAttrs (
-                  map (option: nameValuePair option (kernelPackage.config.isYes option)) [
-                    "MODULES"
-                    "UNIX" # implies CONFIG_NET
-                  ]
-                );
                 watchdog = if config.boot.watchdog.enable then { } else null;
               };
               state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;

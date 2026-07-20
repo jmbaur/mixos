@@ -37,18 +37,10 @@ test findCmdline {
     try std.testing.expectEqualStrings("1", findCmdline("foo=1 \t\n", "foo") orelse unreachable);
 }
 
-// TODO(jared): Make this a hashmap of kconfig to bool to allow for easier
-// additions.
-const KernelConfig = struct {
-    MODULES: bool,
-    UNIX: bool,
-};
-
 const WatchdogConfig = struct {};
 
 const BootConfig = struct {
     kernelModules: []const []const u8,
-    kernel: KernelConfig,
     watchdog: ?WatchdogConfig,
 };
 
@@ -383,11 +375,11 @@ inline fn premountEtc(lower_etc: []const u8) !void {
 }
 
 /// Load all kernel modules declared in the MixOS configuration.
-inline fn loadModules(allocator: std.mem.Allocator, boot: *const BootConfig) !void {
-    if (!boot.kernel.MODULES) {
+inline fn loadModules(io: std.Io, allocator: std.mem.Allocator, boot: *const BootConfig) !void {
+    if (std.Io.Dir.cwd().access(io, "/proc/modules", .{})) {} else |_| {
+        // kernel not built with modules support
         return;
     }
-
     var kmod = try Kmod.init(allocator);
     defer kmod.deinit();
 
@@ -786,17 +778,20 @@ inline fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
     }
 }
 
-inline fn setupNetworking(kernel: *const KernelConfig) !void {
-    if (!kernel.UNIX) {
-        return;
-    }
-
+inline fn setupNetworking() !void {
     // TODO(jared): netlink is nicer
-    const fd: posix.fd_t = @intCast(system.socket(
+    const ret = system.socket(
         system.AF.INET,
         system.SOCK.DGRAM,
         system.IPPROTO.IP,
-    ));
+    );
+
+    const fd: posix.fd_t = switch (system.errno(ret)) {
+        .SUCCESS => @intCast(ret),
+        .NOSYS => return, // kernel not built with networking support
+        else => |err| return posix.unexpectedErrno(err),
+    };
+
     defer _ = system.close(fd);
 
     {
@@ -906,7 +901,7 @@ fn setupSystem(
         log.err("failed to pre-mount /etc: {}", .{err});
     };
 
-    loadModules(allocator, &manifest.boot) catch |err| {
+    loadModules(init.io, allocator, &manifest.boot) catch |err| {
         log.err("failed to load modules: {}", .{err});
     };
 
@@ -924,7 +919,7 @@ fn setupSystem(
         log.err("failed to set hostname: {}", .{err});
     };
 
-    setupNetworking(&manifest.boot.kernel) catch |err| {
+    setupNetworking() catch |err| {
         log.err("failed to setup networking: {}", .{err});
     };
 

@@ -256,10 +256,12 @@ pub fn mount(
     fstype: ?[*:0]const u8,
     flags: u32,
     data: usize,
-) !void {
+) Error!void {
     // TODO(jared): enumerate all possible errors
     switch (system.errno(system.mount(special, dir, fstype, flags, data))) {
         .SUCCESS => {},
+        .NOENT => return Error.UnsupportedFilesystem,
+        .NOMEM => return Error.OutOfMemory,
         else => |err| {
             log.err("failed to mount \"{s}\" on \"{s}\": {s}", .{ special, dir, @tagName(err) });
             return std.posix.unexpectedErrno(err);
