@@ -523,6 +523,12 @@ in
           "inittab".source = pkgs.writeText "mixos-inittab" inittab;
           "mdev.conf".source = pkgs.writeText "mdev.conf" config.mdev.rules;
           "os-release".source = osReleaseFormat.generate "os-release" config.mixos.osRelease;
+          "hosts".source = mkDefault (
+            pkgs.writeText "etc-hosts" ''
+              127.0.0.1 localhost
+              ::1 localhost
+            ''
+          );
           "passwd".source = pkgs.writeText "passwd" (
             concatLines (
               map (
@@ -553,14 +559,6 @@ in
             )
           );
         }
-        (mkIf (kernelPackage.config.isYes "NET") {
-          "hosts".source = mkDefault (
-            pkgs.writeText "etc-hosts" ''
-              127.0.0.1 localhost
-              ::1 localhost
-            ''
-          );
-        })
       ];
 
       mdev.rules = mkBefore (
