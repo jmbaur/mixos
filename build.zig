@@ -2,6 +2,8 @@ const std = @import("std");
 const varlink = @import("varlink");
 
 pub fn build(b: *std.Build) void {
+    const buildtools = b.option(bool, "buildtools", "Install build tools") orelse false;
+
     const target = b.standardTargetOptions(.{
         .default_target = .{
             .abi = .musl,
@@ -11,6 +13,18 @@ pub fn build(b: *std.Build) void {
     });
 
     const optimize = b.standardOptimizeOption(.{});
+
+    if (buildtools) {
+        const kconfig = b.addExecutable(.{
+            .name = "kconfig",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/kconfig.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+            }),
+        });
+        b.installArtifact(kconfig);
+    }
 
     const kmod_dep = b.dependency("kmod", .{});
 

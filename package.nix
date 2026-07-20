@@ -3,6 +3,7 @@
   nukeReferences,
   stdenvNoCC,
   zig_0_16,
+  buildTools ? false,
 }:
 
 # TODO(jared): use zig's setup hook once https://github.com/NixOS/nixpkgs/commit/1dfa28594068cde0031ac471c48da20a18c67cd1 is in a stable release.
@@ -10,7 +11,7 @@ stdenvNoCC.mkDerivation (
   finalAttrs:
   let
     deps = stdenvNoCC.mkDerivation {
-      pname = finalAttrs.pname + "-deps";
+      pname = "mixos-deps";
       inherit (finalAttrs) src version;
       depsBuildBuild = [ zig_0_16 ];
       buildCommand = ''
@@ -26,7 +27,7 @@ stdenvNoCC.mkDerivation (
     };
   in
   {
-    pname = "mixos";
+    pname = lib.concatStringsSep "-" ([ "mixos" ] ++ lib.optional buildTools "buildtools");
     version = "1.5.0";
 
     src = lib.fileset.toSource {
@@ -55,6 +56,7 @@ stdenvNoCC.mkDerivation (
       "--color off"
       "-Doptimize=ReleaseSmall"
       "-Dcpu=baseline"
+      "-Dbuildtools=${lib.boolToString buildTools}"
       "-Dtarget=${
         {
           "armv7l-linux" = "arm-linux";
@@ -89,7 +91,7 @@ stdenvNoCC.mkDerivation (
     '';
 
     postFixup = ''
-      nuke-refs -e $out $out/bin/mixos
+      nuke-refs -e $out $out/bin/*
     '';
 
     meta = {

@@ -477,27 +477,6 @@ in
       _module.args.pkgs = config.nixpkgs.pkgs;
 
       assertions = [
-        (
-          let
-            missing = filter (
-              kconfigOption: !kernelPackage.config.isYes kconfigOption
-            ) config.boot.requiredKernelConfig;
-          in
-          {
-            assertion = missing == [ ];
-            message = ''
-              Kernel configuration is not satisfied, please ensure the configuration has the following:
-
-              ${concatLines (
-                map (
-                  opt:
-                  # Assertion output is more readable when these are indented
-                  # to four spaces each.
-                  "    CONFIG_${opt}=y"
-                ) missing
-              )}'';
-          }
-        )
         {
           assertion =
             (config.boot.kernelModules != [ ] || config.boot.extraModulePackages != [ ]) -> hasModules;
@@ -730,6 +709,7 @@ in
       system.build.initrd = checkAssertWarn config.assertions config.warnings (
         pkgs.callPackage (
           {
+            callPackage,
             cpio,
             erofs-utils,
             jq,
@@ -766,6 +746,7 @@ in
             };
 
             nativeBuildInputs = [
+              (callPackage ./package.nix { buildTools = true; })
               cpio
               erofs-utils
               jq
@@ -773,6 +754,12 @@ in
             ];
 
             buildCommand = ''
+              # Make build-time assertions on kernel configuration, since
+              # evaluation-time access to kernel configuration is limited.
+              kconfig ${kernelPackage.configfile} ${
+                lib.concatMapStringsSep " " (opt: "--assert-yes ${opt}") config.boot.requiredKernelConfig
+              }
+
               mkdir -p store initrd $out
 
               for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do

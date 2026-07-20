@@ -5,7 +5,6 @@ const KconfigSelection = union(enum) {
     yes,
     no,
     module,
-    other: []const u8,
 };
 
 const KconfigEntry = struct {
@@ -25,9 +24,6 @@ const KconfigEntry = struct {
             },
             .module => {
                 try writer.print("CONFIG_{s}=m", .{self.name});
-            },
-            .other => |other| {
-                try writer.print("CONFIG_{s}={s}", .{ self.name, other });
             },
         }
     }
@@ -73,13 +69,15 @@ fn parseKconfigLine(line: []const u8) !?KconfigEntry {
         };
     }
 
-    return .{
-        .name = name,
-        .selection = .{ .other = val },
-    };
+    // TODO(jared): capture non-tristate values (e.g. strings, numbers, etc)
+    return null;
 }
 
+const Kconfig = std.StringHashMapUnmanaged(KconfigSelection);
+
 pub fn main(init: std.process.Init) !void {
+    const allocator = init.arena.allocator();
+
     var args = init.minimal.args.iterate();
     defer args.deinit();
 
@@ -94,6 +92,8 @@ pub fn main(init: std.process.Init) !void {
     var kconfig_file_reader = kconfig_file.reader(init.io, &buf);
     var reader = &kconfig_file_reader.interface;
 
+    var kconfig: Kconfig = .empty;
+
     while (true) {
         const line = reader.takeDelimiterExclusive('\n') catch |err| switch (err) {
             error.EndOfStream => break,
@@ -104,7 +104,47 @@ pub fn main(init: std.process.Init) !void {
             continue;
         }
         if (try parseKconfigLine(line)) |entry| {
-            std.log.info("{f}", .{entry});
+            try kconfig.put(allocator, try allocator.dupe(u8, entry.name), entry.selection);
         }
+    }
+
+    var assertion_failed = false;
+
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--assert-yes")) {
+            const name = args.next() orelse return error.InvalidArgument;
+            const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
+            if (selection != .yes) {
+                std.log.err("CONFIG_{s} is not yes", .{name});
+                assertion_failed = true;
+            }
+        } else if (std.mem.eql(u8, arg, "--assert-yes-or-module")) {
+            const name = args.next() orelse return error.InvalidArgument;
+            const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
+            if (selection != .yes and selection != .module) {
+                std.log.err("CONFIG_{s} is not yes or module", .{name});
+                assertion_failed = true;
+            }
+        } else if (std.mem.eql(u8, arg, "--assert-no")) {
+            const name = args.next() orelse return error.InvalidArgument;
+            const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
+            if (selection != .no) {
+                std.log.err("CONFIG_{s} is not no", .{name});
+                assertion_failed = true;
+            }
+        } else if (std.mem.eql(u8, arg, "--assert-unset")) {
+            const name = args.next() orelse return error.InvalidArgument;
+            const selection = kconfig.get(name) orelse continue; // consider entries not present to be unset
+            if (selection != .unset) {
+                std.log.err("CONFIG_{s} is not unset", .{name});
+                assertion_failed = true;
+            }
+        } else {
+            return error.InvalidArgument;
+        }
+    }
+
+    if (assertion_failed) {
+        return error.KconfigAssertionFailed;
     }
 }
