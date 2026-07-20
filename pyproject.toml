@@ -1,6 +1,6 @@
 [project]
 name = "mixos"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = ["varlink>=32.1.0"]
 
 [build-system]
