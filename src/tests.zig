@@ -1,5 +1,6 @@
 test {
     _ = @import("init.zig");
+    _ = @import("kconfig.zig");
     _ = @import("kmod.zig");
     _ = @import("kmsg.zig");
     _ = @import("log.zig");
