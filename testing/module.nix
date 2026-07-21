@@ -9,6 +9,7 @@ let
   inherit (lib)
     escapeShellArgs
     getExe
+    mkDefault
     mapAttrs
     mkOption
     optionalString
@@ -64,7 +65,7 @@ let
         nixpkgs.pkgs = testConfig.node.pkgs;
 
         # Default to a sane kernel.
-        boot.kernelPackages = lib.mkDefault (
+        boot.kernelPackages = mkDefault (
           pkgs.linuxKernel.packagesFor (
             pkgs.linuxKernel.manualConfig {
               inherit (pkgs.linux_6_18) src version;
