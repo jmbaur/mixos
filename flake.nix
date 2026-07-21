@@ -3,6 +3,8 @@
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    pyproject-nix.url = "github:pyproject-nix/pyproject.nix";
+    pyproject-nix.inputs.nixpkgs.follows = "nixpkgs";
     flake-compat = {
       url = "github:NixOS/flake-compat";
       flake = false;
@@ -24,7 +26,18 @@
         nameValuePair
         readDir
         removeSuffix
+        fileset
         ;
+
+      pythonProject = inputs.pyproject-nix.lib.project.loadPyproject {
+        projectRoot = fileset.toSource {
+          root = ./.;
+          fileset = fileset.unions [
+            ./pyproject.toml
+            ./mixos
+          ];
+        };
+      };
     in
     {
       overlays.default = final: prev: {
@@ -32,54 +45,8 @@
         pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
           (pyfinal: _: {
             mixos = pyfinal.callPackage (
-              {
-                __editable ? false,
-                buildPythonPackage,
-                lib,
-                mkPythonEditablePackage,
-                setuptools,
-                varlink,
-              }:
-
-              let
-                pname = pyproject.project.name;
-                inherit (pyproject.project) version;
-                pyproject = lib.importTOML ./pyproject.toml;
-                build-system = [ setuptools ];
-                dependencies = [ varlink ];
-              in
-              if __editable then
-                mkPythonEditablePackage {
-                  inherit
-                    pname
-                    version
-                    build-system
-                    dependencies
-                    ;
-
-                  root = "$REPO_ROOT";
-                }
-              else
-                buildPythonPackage {
-                  inherit
-                    pname
-                    version
-                    build-system
-                    dependencies
-                    ;
-
-                  pyproject = true;
-
-                  src = lib.fileset.toSource {
-                    root = ./.;
-                    fileset = lib.fileset.unions [
-                      ./pyproject.toml
-                      ./mixos
-                    ];
-                  };
-
-                  meta.mainProgram = "mixos";
-                }
+              { buildPythonPackage }:
+              buildPythonPackage (pythonProject.renderers.buildPythonPackage { inherit (pyfinal) python; })
             ) { };
           })
         ];
@@ -158,21 +125,40 @@
       # Used with the NixOS VM testing framework
       lib.nixosTestModule.imports = [ (import ./testing/module.nix inputs.self.lib.mixosSystem) ];
 
-      devShells = mapAttrs (_: pkgs: {
-        default = pkgs.mkShell {
-          packages = with pkgs; [
-            (python3.withPackages (p: [ (p.mixos.override { __editable = true; }) ]))
-            zig_0_16
-          ];
-          shellHook = ''
-            unset ZIG_GLOBAL_CACHE_DIR
-            export REPO_ROOT=$(git rev-parse --show-toplevel)
-          '';
-        };
-      }) inputs.self.legacyPackages;
+      devShells = mapAttrs (const (
+        pkgs:
+        let
+          python = pkgs.python3.override {
+            self = python;
+            packageOverrides = pyfinal: _: {
+              mixos = pyfinal.callPackage (
+                { mkPythonEditablePackage }:
+                mkPythonEditablePackage (
+                  {
+                    root = "$REPO_ROOT";
+                  }
+                  // pythonProject.renderers.mkPythonEditablePackage { inherit (pyfinal) python; }
+                )
+              ) { };
+            };
+          };
+        in
+        {
+          default = pkgs.mkShell {
+            packages = [
+              (python.withPackages (p: [ p.mixos ]))
+              pkgs.zig_0_16
+            ];
+            shellHook = ''
+              unset ZIG_GLOBAL_CACHE_DIR
+              export REPO_ROOT=$(git rev-parse --show-toplevel)
+            '';
+          };
+        }
+      )) inputs.self.legacyPackages;
 
-      formatter = mapAttrs (
-        _: pkgs:
+      formatter = mapAttrs (const (
+        pkgs:
         pkgs.treefmt.withConfig {
           runtimeInputs = [
             pkgs.nixfmt
@@ -218,6 +204,6 @@
             };
           };
         }
-      ) inputs.self.legacyPackages;
+      )) inputs.self.legacyPackages;
     };
 }
