@@ -26,6 +26,24 @@ pub fn build(b: *std.Build) void {
         b.installArtifact(kconfig);
     }
 
+    const libmnl_dep = b.dependency("libmnl", .{});
+    const libmnl = b.addLibrary(.{
+        .name = "mnl",
+        .root_module = b.createModule(.{
+            .root_source_file = null,
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    libmnl.root_module.addCSourceFiles(.{
+        .root = libmnl_dep.path(""),
+        .files = &.{ "src/socket.c", "src/callback.c", "src/nlmsg.c", "src/attr.c" },
+    });
+    libmnl.root_module.addConfigHeader(b.addConfigHeader(.{}, .{}));
+    libmnl.root_module.addIncludePath(libmnl_dep.path("include"));
+    libmnl.installHeadersDirectory(libmnl_dep.path("include"), "", .{});
+
     const kmod_dep = b.dependency("kmod", .{});
 
     var kmod_cflags: std.ArrayList([]const u8) = .empty;
@@ -121,7 +139,6 @@ pub fn build(b: *std.Build) void {
         .root_module = b.createModule(.{
             .target = target,
             .optimize = optimize,
-            .strip = optimize != .Debug,
             .link_libc = true,
         }),
     });
@@ -139,6 +156,7 @@ pub fn build(b: *std.Build) void {
         .strip = optimize != .Debug,
         .link_libc = true,
     });
+    mixos_module.linkLibrary(libmnl);
     mixos_module.linkLibrary(libkmod);
     mixos_module.linkLibrary(kmod_log_wrapper);
     mixos_module.addImport("varlink", varlink_dep.module("varlink"));
