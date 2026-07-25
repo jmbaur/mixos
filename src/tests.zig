@@ -7,6 +7,7 @@ test {
     _ = @import("main.zig");
     _ = @import("modprobe.zig");
     _ = @import("mount.zig");
+    _ = @import("netlink.zig");
     _ = @import("process.zig");
     _ = @import("syslog.zig");
     _ = @import("test-backdoor.zig");

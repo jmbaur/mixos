@@ -3,6 +3,7 @@ const Mount = @import("mount.zig");
 const Watchdog = @import("watchdog.zig");
 const builtin = @import("builtin");
 const kmsg = @import("kmsg.zig");
+const netlink = @import("netlink.zig");
 const posix = std.posix;
 const process = @import("process.zig");
 const std = @import("std");
@@ -784,44 +785,10 @@ inline fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 inline fn setupNetworking() !void {
-    // TODO(jared): netlink is nicer
-    const ret = system.socket(
-        system.AF.INET,
-        system.SOCK.DGRAM,
-        system.IPPROTO.IP,
-    );
-
-    const fd: posix.fd_t = switch (system.errno(ret)) {
-        .SUCCESS => @intCast(ret),
-        .NOSYS => return, // kernel not built with networking support
-        else => |err| return posix.unexpectedErrno(err),
+    netlink.setInterfaceState("lo", .up) catch |err| switch (err) {
+        error.MnlSocketOpen => {},
+        else => return err,
     };
-
-    defer _ = system.close(fd);
-
-    {
-        var ifr = std.mem.zeroes(system.ifreq);
-        std.mem.copyForwards(u8, &ifr.ifrn.name, "lo");
-        switch (system.errno(system.ioctl(
-            fd,
-            system.SIOCGIFFLAGS,
-            @intFromPtr(&ifr),
-        ))) {
-            .SUCCESS => {},
-            else => |err| return posix.unexpectedErrno(err),
-        }
-
-        ifr.ifru.flags.UP = true;
-
-        switch (system.errno(system.ioctl(
-            fd,
-            system.SIOCSIFFLAGS,
-            @intFromPtr(&ifr),
-        ))) {
-            .SUCCESS => {},
-            else => |err| return posix.unexpectedErrno(err),
-        }
-    }
 }
 
 // TODO(jared): enumerate all possible errors
