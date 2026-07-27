@@ -390,8 +390,9 @@ inline fn loadModules(io: std.Io, boot: *const BootConfig) !void {
     defer kmod.deinit();
 
     for (boot.kernelModules) |module| {
-        kmod.modprobe(module) catch |err| {
-            log.err("failed to load module {s}: {}", .{ module, err });
+        kmod.modprobe(module) catch |err| switch (err) {
+            error.ModulesNotAvailable => break,
+            else => log.err("failed to load module {s}: {}", .{ module, err }),
         };
     }
 }
