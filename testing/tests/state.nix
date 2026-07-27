@@ -4,6 +4,11 @@
   mixos.nodes.machine = { pkgs, ... }: {
     testing.qemu.diskImage = 1024 * 1024 * 1024;
 
+    boot.kernelModules = [
+      "virtio_blk"
+      "ext4"
+    ];
+
     state = {
       enable = true;
       fsType = "ext2";

@@ -14,18 +14,6 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
-    if (buildtools) {
-        const kconfig = b.addExecutable(.{
-            .name = "kconfig",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/kconfig.zig"),
-                .target = b.graph.host,
-                .optimize = .Debug,
-            }),
-        });
-        b.installArtifact(kconfig);
-    }
-
     const libmnl_dep = b.dependency("libmnl", .{});
     const libmnl = b.addLibrary(.{
         .name = "mnl",
@@ -146,6 +134,31 @@ pub fn build(b: *std.Build) void {
         .file = b.path("src/kmod-log-wrapper.c"),
     });
     kmod_log_wrapper.installHeader(b.path("src/kmod-log-wrapper.h"), "kmod-log-wrapper.h");
+
+    if (buildtools) {
+        const kconfig = b.addExecutable(.{
+            .name = "kconfig",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/kconfig.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
+        });
+        b.installArtifact(kconfig);
+
+        const copy_modules_closure = b.addExecutable(.{
+            .name = "copy-modules-closure",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("src/copy-modules-closure.zig"),
+                .target = target,
+                .optimize = optimize,
+                .link_libc = true,
+            }),
+        });
+        copy_modules_closure.root_module.linkLibrary(libkmod);
+        copy_modules_closure.root_module.linkLibrary(kmod_log_wrapper);
+        b.installArtifact(copy_modules_closure);
+    }
 
     const varlink_dep = b.dependency("varlink", .{});
 

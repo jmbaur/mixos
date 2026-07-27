@@ -1,4 +1,5 @@
 test {
+    _ = @import("copy-modules-closure.zig");
     _ = @import("init.zig");
     _ = @import("kconfig.zig");
     _ = @import("kmod.zig");

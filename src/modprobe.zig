@@ -5,12 +5,12 @@ const Kmod = @import("kmod.zig");
 const log = std.log.scoped(.mixos);
 
 pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.Iterator) anyerror!void {
+    _ = init;
+
     syslog.init(name);
     defer syslog.deinit();
 
-    const allocator = init.arena.allocator();
-
-    var kmod = try Kmod.init(allocator);
+    var kmod = try Kmod.init(.{});
     defer kmod.deinit();
 
     while (args.next()) |arg| {

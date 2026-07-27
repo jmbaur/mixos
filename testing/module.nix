@@ -9,8 +9,9 @@ let
   inherit (lib)
     escapeShellArgs
     getExe
-    mkDefault
+    kernel
     mapAttrs
+    mkDefault
     mkOption
     optionalString
     optionals
@@ -21,9 +22,6 @@ let
 
   machineTestModule =
     { config, pkgs, ... }:
-    let
-      configfile = ./${pkgs.stdenv.hostPlatform.linuxArch}.config;
-    in
     {
       options.testing.qemu = {
         args = mkOption {
@@ -42,8 +40,8 @@ let
         };
         memory = mkOption {
           type = types.ints.positive;
-          default = 512 * 1024 * 1024;
-          defaultText = "512MiB";
+          default = 1 * 1024 * 1024 * 1024;
+          defaultText = "1GiB";
           description = ''
             The amount of memory to provide to the VM.
           '';
@@ -59,17 +57,31 @@ let
       };
 
       config = {
+        boot.kernelModules = [
+          "virtio_balloon"
+          "virtio_console"
+          "virtio_pci"
+          "virtio_rng"
+        ];
+
         mixos.testing.enable = true;
 
         # Reuse the same package set used by NixOS VM nodes.
         nixpkgs.pkgs = testConfig.node.pkgs;
 
-        # Default to a sane kernel.
+        # TODO(jared): Remove this once we have https://github.com/NixOS/nixpkgs/pull/546157
         boot.kernelPackages = mkDefault (
-          pkgs.linuxKernel.packagesFor (
-            pkgs.linuxKernel.manualConfig {
-              inherit (pkgs.linux_6_18) src version;
-              inherit configfile;
+          pkgs.linuxPackages.extend (
+            self: super: {
+              kernel = super.kernel.override {
+                kernelPatches = [
+                  {
+                    name = "module-decompress";
+                    patch = null;
+                    structuredExtraConfig.MODULE_DECOMPRESS = kernel.yes;
+                  }
+                ];
+              };
             }
           )
         );

@@ -18,6 +18,7 @@
       inherit (inputs.nixpkgs.lib)
         const
         evalModules
+        fileset
         flip
         genAttrs
         listToAttrs
@@ -26,7 +27,6 @@
         nameValuePair
         readDir
         removeSuffix
-        fileset
         ;
 
       pythonProject = inputs.pyproject-nix.lib.project.loadPyproject {
@@ -43,12 +43,14 @@
       overlays.default = final: prev: {
         mixos = final.callPackage ./package.nix { };
         pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
-          (pyfinal: _: {
-            mixos = pyfinal.callPackage (
-              { buildPythonPackage }:
-              buildPythonPackage (pythonProject.renderers.buildPythonPackage { inherit (pyfinal) python; })
-            ) { };
-          })
+          (flip (
+            const (pyfinal: {
+              mixos = pyfinal.callPackage (
+                { buildPythonPackage }:
+                buildPythonPackage (pythonProject.renderers.buildPythonPackage { inherit (pyfinal) python; })
+              ) { };
+            })
+          ))
         ];
       };
 
