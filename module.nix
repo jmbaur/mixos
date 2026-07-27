@@ -822,7 +822,9 @@ in
               else
                 echo "could not detect erofs compression algorithm, using none"
               fi
-              echo "Using $erofs_zip for erofs compression"
+              if [[ -n "$erofs_zip" ]]; then
+                echo "Using $erofs_zip for erofs compression"
+              fi
               mkfs.erofs "$erofs_zip" -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
 
               install -Dm0755 ${getExe config.mixos.package} initrd/init
