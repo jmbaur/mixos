@@ -18,9 +18,11 @@ let
     concatStringsSep
     const
     elem
+    escapeShellArgs
     filterAttrs
     flatten
     flip
+    genAttrs
     getAttr
     getBin
     getExe
@@ -29,6 +31,7 @@ let
     groupBy
     hasAttr
     id
+    kernel
     listToAttrs
     literalExpression
     mapAttrs
@@ -40,8 +43,8 @@ let
     mkMerge
     mkOption
     mkRenamedOptionModule
+    optional
     optionalString
-    optionals
     subtractLists
     textClosureMap
     types
@@ -129,12 +132,26 @@ in
 
     boot = {
       requiredKernelConfig = mkOption {
-        type = types.listOf types.str;
-        default = [ ];
+        type = types.attrsOf types.raw;
+        default = { };
+        example = ''
+          {
+            TMPFS = lib.kernel.yes;
+            OVERLAY_FS = lib.kernel.module;
+          }
+        '';
+        description = ''
+          Attribute set of kernel Kconfig options that must be included in the
+          kernel provided to mixos. Values (from lib.kernel) are asserted
+          against the configured kernel, where lib.kernel.module is satisfied
+          with either 'y' or 'm'.
+        '';
       };
 
       kernelPackages = mkOption {
         type = types.raw;
+        default = pkgs.linuxPackages;
+        defaultText = "pkgs.linuxPackages";
         description = ''
           A kernel package-set containing a kernel attribute and optionally one
           or more kernel modules (à la pkgs.linuxPackagesFor ...).
@@ -629,24 +646,24 @@ in
       };
     }
     {
-      boot.requiredKernelConfig = [
-        "BLK_DEV_LOOP"
-        "EPOLL"
-        "EROFS_FS"
-        "EVENTFD"
-        "FUTEX"
-        "OVERLAY_FS"
-        "RD_XZ"
-        "TIMERFD"
-        "TMPFS"
-      ]
-      ++ optionals (config.boot.firmware != [ ]) [
-        "FW_LOADER_COMPRESS_XZ"
-      ]
-      ++ optionals (kernelPackage.config.isYes "MODULE_COMPRESS") [
-        # This allows kmod to call finit_module() with the MODULE_INIT_COMPRESSED_FILE flag
-        "MODULE_DECOMPRESS"
-        "MODULE_COMPRESS_XZ"
+      boot.requiredKernelConfig = mkMerge [
+        {
+          BLK_DEV_LOOP = kernel.module;
+          EROFS_FS = kernel.module;
+          OVERLAY_FS = kernel.module;
+        }
+        (genAttrs (
+          [
+            "EPOLL"
+            "EVENTFD"
+            "FUTEX"
+            "RD_XZ"
+            "TIMERFD"
+            "TMPFS"
+          ]
+          ++ optional (config.boot.firmware != [ ]) "FW_LOADER_COMPRESS_XZ"
+          ++ optional (kernelPackage.config.isYes "MODULE_COMPRESS") "MODULE_DECOMPRESS"
+        ) (const kernel.yes))
       ];
     }
     {
@@ -716,7 +733,7 @@ in
       system.build.initrd = checkAssertWarn config.assertions config.warnings (
         pkgs.callPackage (
           {
-            callPackage,
+            buildPackages,
             cpio,
             erofs-utils,
             jq,
@@ -734,9 +751,7 @@ in
               config.system.build.usr
               config.system.build.etc
             ]
-            ++ optionals (config.state.enable && config.state.init != null) [
-              config.state.init
-            ]
+            ++ optional (config.state.enable && config.state.init != null) config.state.init
             ++ mapAttrsToList (const (getAttr "run")) enabledServices;
 
             env.manifest = builtins.toJSON {
@@ -753,7 +768,7 @@ in
             };
 
             nativeBuildInputs = [
-              (callPackage ./package.nix { buildTools = true; })
+              (buildPackages.callPackage ./package.nix { buildTools = true; })
               cpio
               erofs-utils
               jq
@@ -764,28 +779,51 @@ in
               # Make build-time assertions on kernel configuration, since
               # evaluation-time access to kernel configuration is limited.
               kconfig ${kernelPackage.configfile} ${
-                lib.concatMapStringsSep " " (opt: "--assert-yes ${opt}") config.boot.requiredKernelConfig
+                escapeShellArgs (
+                  mapAttrsToList (
+                    kconfig: value:
+                    if value.tristate == null then
+                      "--assert-unset ${kconfig}"
+                    else
+                      {
+                        "y" = "--assert-yes ${kconfig}";
+                        "m" = "--assert-yes-or-module ${kconfig}";
+                        "n" = "--assert-no ${kconfig}";
+                      }
+                      .${value.tristate}
+                  ) (filterAttrs (const (value: value ? freeform || value.optional)) config.boot.requiredKernelConfig)
+                )
               }
 
               mkdir -p store initrd $out
+
+              # Copy kernel modules that are crucial for booting. We don't need
+              # to provide any user-customizability here since the root
+              # filesystem is _inside_ the initrd.
+              copy-modules-closure \
+                ${config.system.build.kernelModules}/lib/modules/${kernelPackage.modDirVersion} \
+                initrd/lib/modules/${kernelPackage.modDirVersion} \
+                loop erofs overlay
+              cp \
+                ${config.system.build.kernelModules}/lib/modules/${kernelPackage.modDirVersion}/modules.* \
+                initrd/lib/modules/${kernelPackage.modDirVersion}
 
               for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do
                 cp -r $output_path store/
               done
 
-              declare erofs_zip
+              erofs_zip=
               if kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_LZMA 2>/dev/null; then
-                erofs_zip=lzma
+                erofs_zip="-zlzma"
               elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_ZSTD 2>/dev/null; then
-                erofs_zip=zstd
+                erofs_zip="-zzstd"
               elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_DEFLATE 2>/dev/null; then
-                erofs_zip=deflate
+                erofs_zip="-zdeflate"
               else
-                echo "could not detect erofs compression algorithm"
-                exit 1
+                echo "could not detect erofs compression algorithm, using none"
               fi
               echo "Using $erofs_zip for erofs compression"
-              mkfs.erofs -z"$erofs_zip" -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
+              mkfs.erofs "$erofs_zip" -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
 
               install -Dm0755 ${getExe config.mixos.package} initrd/init
 

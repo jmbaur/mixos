@@ -376,7 +376,7 @@ inline fn premountEtc(lower_etc: []const u8) !void {
 }
 
 /// Load all kernel modules declared in the MixOS configuration.
-inline fn loadModules(io: std.Io, allocator: std.mem.Allocator, boot: *const BootConfig) !void {
+inline fn loadModules(io: std.Io, boot: *const BootConfig) !void {
     if (std.Io.Dir.cwd().access(io, "/proc/modules", .{})) {} else |_| {
         // kernel not built with modules support
         return;
@@ -386,7 +386,7 @@ inline fn loadModules(io: std.Io, allocator: std.mem.Allocator, boot: *const Boo
         return;
     }
 
-    var kmod = try Kmod.init(allocator);
+    var kmod = try Kmod.init(.{});
     defer kmod.deinit();
 
     for (boot.kernelModules) |module| {
@@ -852,6 +852,16 @@ fn setupSystem(
 
         manifest = manifest_.value;
 
+        var kmod = try Kmod.init(.{});
+        defer kmod.deinit();
+
+        for ([_][]const u8{ "loop", "overlay", "erofs" }) |module_query| {
+            kmod.modprobe(module_query) catch |err| switch (err) {
+                error.ModulesNotAvailable => break,
+                else => return err,
+            };
+        }
+
         store_blockdev = try createStoreLoopback(init.io, allocator, store_fd, manifest.storeFS);
 
         try switchRoot(init.io, root_dir);
@@ -873,7 +883,7 @@ fn setupSystem(
         log.err("failed to pre-mount /etc: {}", .{err});
     };
 
-    loadModules(init.io, allocator, &manifest.boot) catch |err| {
+    loadModules(init.io, &manifest.boot) catch |err| {
         log.err("failed to load modules: {}", .{err});
     };
 

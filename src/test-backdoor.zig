@@ -131,8 +131,7 @@ const ListenParam = union(enum) {
 
     /// Supports most of the same strings as systemd.socket's ListenStream=.
     pub fn parse(arg: []const u8) !ListenParam {
-        if (std.mem.startsWith(u8, arg, "vsock:")) {
-            const vsock_arg = std.mem.trimStart(u8, arg, "vsock:");
+        if (std.mem.cutPrefix(u8, arg, "vsock:")) |vsock_arg| {
             var split = std.mem.splitScalar(u8, vsock_arg, ':');
             const cid_arg = split.next() orelse return error.MissingCID;
             const port_arg = split.next() orelse return error.MissingPort;

@@ -112,35 +112,35 @@ pub fn main(init: std.process.Init) !void {
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--assert-yes")) {
-            const name = args.next() orelse return error.InvalidArgument;
+            const name = args.next() orelse return error.InvalidArguments;
             const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
             if (selection != .yes) {
                 std.log.err("CONFIG_{s} is not yes", .{name});
                 assertion_failed = true;
             }
         } else if (std.mem.eql(u8, arg, "--assert-yes-or-module")) {
-            const name = args.next() orelse return error.InvalidArgument;
+            const name = args.next() orelse return error.InvalidArguments;
             const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
             if (selection != .yes and selection != .module) {
                 std.log.err("CONFIG_{s} is not yes or module", .{name});
                 assertion_failed = true;
             }
         } else if (std.mem.eql(u8, arg, "--assert-no")) {
-            const name = args.next() orelse return error.InvalidArgument;
+            const name = args.next() orelse return error.InvalidArguments;
             const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
             if (selection != .no) {
                 std.log.err("CONFIG_{s} is not no", .{name});
                 assertion_failed = true;
             }
         } else if (std.mem.eql(u8, arg, "--assert-unset")) {
-            const name = args.next() orelse return error.InvalidArgument;
+            const name = args.next() orelse return error.InvalidArguments;
             const selection = kconfig.get(name) orelse continue; // consider entries not present to be unset
             if (selection != .unset) {
                 std.log.err("CONFIG_{s} is not unset", .{name});
                 assertion_failed = true;
             }
         } else {
-            return error.InvalidArgument;
+            return error.InvalidArguments;
         }
     }
 
