@@ -150,11 +150,29 @@ in
 
       kernelPackages = mkOption {
         type = types.raw;
+        apply =
+          kernelPackages:
+          kernelPackages.extend (
+            self: super: {
+              kernel = super.kernel.override (originalArgs: {
+                kernelPatches = (originalArgs.kernelPatches or [ ]) ++ config.boot.kernelPatches;
+              });
+            }
+          );
         default = pkgs.linuxPackages;
         defaultText = "pkgs.linuxPackages";
         description = ''
           A kernel package-set containing a kernel attribute and optionally one
           or more kernel modules (à la pkgs.linuxPackagesFor ...).
+        '';
+      };
+
+      kernelPatches = mkOption {
+        type = types.listOf types.attrs;
+        default = [ ];
+        description = ''
+          A list of additional patches to apply to the kernel. See NixOS
+          documentation for more information.
         '';
       };
 

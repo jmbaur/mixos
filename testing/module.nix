@@ -70,21 +70,13 @@ let
         nixpkgs.pkgs = testConfig.node.pkgs;
 
         # TODO(jared): Remove this once we have https://github.com/NixOS/nixpkgs/pull/546157
-        boot.kernelPackages = mkDefault (
-          pkgs.linuxPackages.extend (
-            self: super: {
-              kernel = super.kernel.override {
-                kernelPatches = [
-                  {
-                    name = "module-decompress";
-                    patch = null;
-                    structuredExtraConfig.MODULE_DECOMPRESS = kernel.yes;
-                  }
-                ];
-              };
-            }
-          )
-        );
+        boot.kernelPatches = [
+          {
+            name = "module-decompress";
+            patch = null;
+            structuredExtraConfig.MODULE_DECOMPRESS = kernel.yes;
+          }
+        ];
 
         testing.qemu.args = [
           "-nographic"
