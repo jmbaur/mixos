@@ -9,9 +9,7 @@ let
   inherit (lib)
     escapeShellArgs
     getExe
-    kernel
     mapAttrs
-    mkDefault
     mkOption
     optionalString
     optionals
@@ -68,15 +66,6 @@ let
 
         # Reuse the same package set used by NixOS VM nodes.
         nixpkgs.pkgs = testConfig.node.pkgs;
-
-        # TODO(jared): Remove this once we have https://github.com/NixOS/nixpkgs/pull/546157
-        boot.kernelPatches = [
-          {
-            name = "module-decompress";
-            patch = null;
-            structuredExtraConfig.MODULE_DECOMPRESS = kernel.yes;
-          }
-        ];
 
         testing.qemu.args = [
           "-nographic"
