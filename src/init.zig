@@ -191,12 +191,17 @@ fn removeAllContent(io: std.Io, dir: std.Io.Dir, directory: []const u8, new_root
         },
     }
 
+    var entry_name_buf: [std.fs.max_path_bytes]u8 = undefined;
+
     var iter = old_root.iterate();
     while (iter.next(io) catch return) |entry| {
+        entry_name_buf = @splat(0);
+        std.mem.copyForwards(u8, &entry_name_buf, entry.name);
+
         var entry_statx = std.mem.zeroes(system.Statx);
         switch (system.errno(system.statx(
             old_root.handle,
-            entry.name[0..entry.name.len :0],
+            entry_name_buf[0..entry.name.len :0],
             0,
             std.Io.Threaded.linux_statx_request,
             &entry_statx,
