@@ -146,7 +146,22 @@
           };
 
           runnerMixos = inputs.self.lib.mixosSystem {
-            modules = [ { nixpkgs = { inherit pkgs; }; } ];
+            modules = [
+              {
+                nixpkgs = { inherit pkgs; };
+                init.shell = {
+                  action = "askfirst";
+                  tty =
+                    if pkgs.stdenv.hostPlatform.isx86_64 then
+                      "/dev/ttyS0"
+                    else if pkgs.stdenv.hostPlatform.isAarch64 then
+                      "/dev/ttyAMA0"
+                    else
+                      "/dev/console";
+                  process = "/bin/sh";
+                };
+              }
+            ];
           };
         in
         {
