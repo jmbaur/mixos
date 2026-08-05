@@ -14,6 +14,8 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
+    const cpio_dep = b.dependency("cpio", .{});
+
     const libmnl_dep = b.dependency("libmnl", .{});
     const libmnl = b.addLibrary(.{
         .name = "mnl",
@@ -187,21 +189,25 @@ pub fn build(b: *std.Build) void {
         .name = "mixos",
         .root_module = mixos_module,
     });
+    b.installArtifact(mixos);
 
-    const mixos_install_artifact = b.addInstallArtifact(mixos, .{});
-    b.getInstallStep().dependOn(&mixos_install_artifact.step);
+    const mixos_runner = b.addExecutable(.{
+        .name = "mixos-runner",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .root_source_file = b.path("src/runner.zig"),
+        }),
+    });
+    mixos_runner.root_module.addImport("cpio", cpio_dep.module("cpio"));
 
-    const run_cmd = b.addRunArtifact(mixos);
-
-    run_cmd.step.dependOn(b.getInstallStep());
-
-    run_cmd.addArg("test-backdoor");
+    const runner_tool = b.addRunArtifact(mixos_runner);
+    runner_tool.addArtifactArg(mixos);
     if (b.args) |args| {
-        run_cmd.addArgs(args);
+        runner_tool.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the mixos test backdoor");
-    run_step.dependOn(&run_cmd.step);
+    const run_step = b.step("run", "Run in qemu");
+    run_step.dependOn(&runner_tool.step);
 
     const unit_tests_module = b.createModule(.{
         .root_source_file = b.path("src/tests.zig"),

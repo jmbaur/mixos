@@ -5,6 +5,10 @@
     .minimum_zig_version = "0.16.0",
     .paths = .{ "build.zig", "build.zig.zon", "com.jmbaur.mixos.varlink", "src" },
     .dependencies = .{
+        .cpio = .{
+            .url = "https://github.com/jmbaur/cpio-zig/archive/ef0f6afcb052e5886196732410027d5bc028d38c.tar.gz",
+            .hash = "cpio-0.1.0--45Eq8wiAAD6iCzNraQDROe4nIpbQCmmZmDN1ZQKeVCT",
+        },
         .kmod = .{
             .url = "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git/snapshot/kmod-34.2.tar.gz",
             .hash = "N-V-__8AACXSEAC4vv9Dh65rS1ICs847KPjvNop6RIHJUDNN",

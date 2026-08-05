@@ -144,6 +144,10 @@
               ) { };
             };
           };
+
+          runnerMixos = inputs.self.lib.mixosSystem {
+            modules = [ { nixpkgs = { inherit pkgs; }; } ];
+          };
         in
         {
           default = pkgs.mkShell {
@@ -154,6 +158,8 @@
             shellHook = ''
               unset ZIG_GLOBAL_CACHE_DIR
               export REPO_ROOT=$(git rev-parse --show-toplevel)
+              export MIXOS_KERNEL=${runnerMixos.config.system.build.toplevel}/kernel
+              export MIXOS_INITRD=${runnerMixos.config.system.build.toplevel}/initrd
             '';
           };
         }
