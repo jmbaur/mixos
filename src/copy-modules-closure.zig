@@ -5,7 +5,9 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
 
     var args = init.minimal.args.iterate();
-    _ = args.next();
+    if (!args.skip()) {
+        return error.InvalidArguments;
+    }
 
     const module_root = args.next() orelse return error.InvalidArguments;
 

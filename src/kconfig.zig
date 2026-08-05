@@ -81,9 +81,11 @@ pub fn main(init: std.process.Init) !void {
     var args = init.minimal.args.iterate();
     defer args.deinit();
 
-    _ = args.next(); // skip argv[0]
+    if (!args.skip()) {
+        return error.InvalidArguments;
+    }
 
-    const kconfig_filepath = args.next() orelse return error.MissingArgument;
+    const kconfig_filepath = args.next() orelse return error.InvalidArguments;
 
     var kconfig_file = try std.Io.Dir.cwd().openFile(init.io, kconfig_filepath, .{});
     defer kconfig_file.close(init.io);

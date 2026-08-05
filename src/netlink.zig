@@ -58,7 +58,9 @@ pub fn setInterfaceState(ifname: [:0]const u8, state: enum { up, down }) !void {
 
 pub fn main(init: std.process.Init) !void {
     var iter = init.minimal.args.iterate();
-    _ = iter.next();
+    if (!iter.skip()) {
+        return error.InvalidArguments;
+    }
     const ifname = iter.next() orelse return error.InvalidArguments;
     const state = iter.next() orelse return error.InvalidArguments;
     try setInterfaceState(
