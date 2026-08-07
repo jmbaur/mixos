@@ -680,7 +680,6 @@ in
             "TMPFS"
           ]
           ++ optional (config.boot.firmware != [ ]) "FW_LOADER_COMPRESS_XZ"
-          ++ optional (kernelPackage.config.isYes "MODULE_COMPRESS") "MODULE_DECOMPRESS"
         ) (const kernel.yes))
       ];
     }
@@ -812,6 +811,15 @@ in
                   ) (filterAttrs (const (value: value ? freeform || value.optional)) config.boot.requiredKernelConfig)
                 )
               }
+
+              # Make some more build-time assertions on kernel configuration,
+              # predicated on the value of other kernel configuration options.
+              # We do it like this as opposed to conditionally including
+              # assertions at evaluation time since we cannot depend on having
+              # access to the full configuration at evaluation time.
+              if kconfig --assert-yes MODULE_COMPRESS 2>/dev/null; then
+                kconfig ${kernelPackage.configfile} --assert-yes MODULE_DECOMPRESS
+              fi
 
               mkdir -p store initrd $out
 
