@@ -4,6 +4,7 @@ const system = std.os.linux;
 
 const C = @cImport({
     @cInclude("fcntl.h");
+    @cInclude("linux/loop.h");
     @cInclude("linux/mount.h");
     @cInclude("linux/watchdog.h");
 });
@@ -169,6 +170,66 @@ pub fn waitid(id_type: system.P, id: i32, infop: *system.siginfo_t, flags: u32, 
             else => |err| return posix.unexpectedErrno(err),
         }
         break;
+    }
+}
+
+pub fn loopbackGetFree(io: std.Io) !usize {
+    const loop_control = try std.Io.Dir.cwd().openFile(io, "/dev/loop-control", .{ .mode = .read_write });
+    defer loop_control.close(io);
+
+    const loop_nr = system.ioctl(loop_control.handle, C.LOOP_CTL_GET_FREE, 0);
+
+    // TODO(jared): enumerate all possible errors
+    switch (system.errno(loop_nr)) {
+        .SUCCESS => return loop_nr,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+
+    return error.Todo;
+}
+
+pub fn loopbackSetFD(loopback_device: posix.fd_t, handle: posix.fd_t) !void {
+    switch (system.errno(system.ioctl(loopback_device, C.LOOP_SET_FD, @intCast(handle)))) {
+        .SUCCESS => {},
+        .BADF => unreachable,
+        .INVAL => return error.InvalidBackingFile,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn ftruncate(fd: posix.fd_t, length: u64) !void {
+    while (true) {
+        switch (system.errno(system.ftruncate(fd, @intCast(length)))) {
+            .SUCCESS => {},
+            .INTR => continue,
+            .INVAL => unreachable,
+            .FBIG => return error.LengthTooBig,
+            else => |err| return posix.unexpectedErrno(err),
+        }
+        break;
+    }
+}
+
+pub fn memfdCreate(name: [*:0]const u8, flags: u32) !posix.fd_t {
+    const ret = system.memfd_create(name, flags);
+    switch (system.errno(ret)) {
+        .SUCCESS => return @intCast(ret),
+        .FAULT, .INVAL => unreachable,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        .PERM => return error.PermissionDenied,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn sendfile(outfd: posix.fd_t, infd: posix.fd_t, offset: ?*i64, count: u64) !usize {
+    const ret = system.sendfile(outfd, infd, offset, @intCast(count));
+    switch (system.errno(ret)) {
+        .SUCCESS => return ret,
+        .INVAL => return error.Todo,
+        .SPIPE => return error.Unseekable,
+        .OVERFLOW => return error.CountTooBig,
+        else => |err| return posix.unexpectedErrno(err),
     }
 }
 

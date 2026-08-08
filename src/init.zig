@@ -15,9 +15,6 @@ const C = @cImport({
 
 const log = std.log.scoped(.mixos);
 
-const LOOP_SET_FD = 0x4C00;
-const LOOP_CTL_GET_FREE = 0x4C82;
-
 fn findCmdline(cmdline: []const u8, want_key: []const u8) ?[]const u8 {
     var entry_split = std.mem.tokenizeSequence(u8, cmdline, &std.ascii.whitespace);
     while (entry_split.next()) |entry| {
@@ -84,36 +81,12 @@ const Manifest = struct {
 };
 
 inline fn firstAvailableLoopDevice(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
-    const loop_control = try std.Io.Dir.cwd().openFile(io, "/dev/loop-control", .{ .mode = .read_write });
-    defer loop_control.close(io);
-
-    const loop_nr = system.ioctl(loop_control.handle, LOOP_CTL_GET_FREE, 0);
-
-    // TODO(jared): enumerate all possible errors
-    switch (system.errno(loop_nr)) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("failed to get next free loopback number: {s}", .{@tagName(err)});
-            return posix.unexpectedErrno(err);
-        },
-    }
-
-    return try std.fmt.allocPrintSentinel(allocator, "/dev/loop{}", .{@as(usize, loop_nr)}, 0);
-}
-
-fn ftruncate(fd: posix.fd_t, length: i64) !void {
-    switch (system.errno(system.ftruncate(fd, length))) {
-        .SUCCESS => {},
-        else => |err| return posix.unexpectedErrno(err),
-    }
-}
-
-fn sendfile(outfd: posix.fd_t, infd: posix.fd_t, offset: ?*i64, count: u64) !usize {
-    const ret = system.sendfile(outfd, infd, offset, @intCast(count));
-    switch (system.errno(ret)) {
-        .SUCCESS => return ret,
-        else => |err| return posix.unexpectedErrno(err),
-    }
+    return try std.fmt.allocPrintSentinel(
+        allocator,
+        "/dev/loop{}",
+        .{try linux.loopbackGetFree(io)},
+        0,
+    );
 }
 
 inline fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd: posix.fd_t, store_fs_source: []const u8) ![]const u8 {
@@ -121,8 +94,13 @@ inline fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd
     defer store_fs.close(io);
     const store_stat = try store_fs.stat(io);
 
-    try ftruncate(store_fd, @intCast(store_stat.size));
-    _ = try sendfile(store_fd, store_fs.handle, null, store_stat.size);
+    try linux.ftruncate(store_fd, store_stat.size);
+    const bytes_copied = try linux.sendfile(store_fd, store_fs.handle, null, store_stat.size);
+    if (bytes_copied != @as(usize, @intCast(store_stat.size))) {
+        log.err("Failed to copy store image (size {Bi}), copied {Bi}", .{ store_stat.size, bytes_copied });
+        return error.PartialStoreCopy;
+    }
+
     if (system.fcntl(
         store_fd,
         C.F_ADD_SEALS,
@@ -137,16 +115,13 @@ inline fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd
     const loop_device = try std.Io.Dir.cwd().openFile(io, loop_device_path, .{ .mode = .read_write });
     defer loop_device.close(io);
 
-    // We cannot use the fancy erofs feature that allows for skipping loopback device creation, since our erofs
-    // https://github.com/gregkh/linux/blob/f2b09e8b594ce61b8ff508ea1fb594b3b24ec6d3/fs/erofs/super.c#L798-L799
-    // TODO(jared): enumerate all possible errors
-    switch (system.errno(system.ioctl(loop_device.handle, LOOP_SET_FD, @intCast(store_fd)))) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("failed to set backing file on loopback device: {s}", .{@tagName(err)});
-            return posix.unexpectedErrno(err);
-        },
-    }
+    // We cannot use the fancy erofs feature that allows for skipping loopback
+    // device creation, since our erofs image is not placed on a true block
+    // device. See https://github.com/gregkh/linux/blob/f2b09e8b594ce61b8ff508ea1fb594b3b24ec6d3/fs/erofs/super.c#L798-L799
+    linux.loopbackSetFD(loop_device.handle, store_fd) catch |err| {
+        log.err("failed to set backing file on loopback device: {}", .{err});
+        return err;
+    };
 
     return loop_device_path;
 }
@@ -791,15 +766,6 @@ inline fn setupNetworking() !void {
     };
 }
 
-// TODO(jared): enumerate all possible errors
-fn memfd_create(name: [*:0]const u8, flags: u32) !posix.fd_t {
-    const ret = system.memfd_create(name, flags);
-    switch (system.errno(ret)) {
-        .SUCCESS => return @intCast(ret),
-        else => |err| return posix.unexpectedErrno(err),
-    }
-}
-
 fn setupWatchdog(io: std.Io, watchdog: *const WatchdogConfig) !?Watchdog {
     _ = watchdog;
 
@@ -817,7 +783,7 @@ fn setupSystem(
     // vanity of having a low file descriptor number.
     //
     // NOTE: We don't close the store_fd, since that would deallocate the memfd
-    const store_fd = try memfd_create("store", system.MFD.ALLOW_SEALING);
+    const store_fd = try linux.memfdCreate("store", system.MFD.ALLOW_SEALING);
 
     const allocator = init.arena.allocator();
 

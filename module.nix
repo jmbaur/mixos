@@ -621,6 +621,9 @@ in
         };
       };
 
+      # Consider writing our own watchdog daemon, since this does not handle
+      # the case where the watchdog character device does not exist, so runsv
+      # constantly restarts the process.
       services.watchdog = mkIf config.boot.watchdog.enable {
         run = mkDefault (
           pkgs.writeScript "watchdog-run" ''

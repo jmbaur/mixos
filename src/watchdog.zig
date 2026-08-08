@@ -2,9 +2,6 @@ const linux = @import("linux.zig");
 const posix = std.posix;
 const std = @import("std");
 const system = std.os.linux;
-const C = @cImport({
-    @cInclude("linux/watchdog.h");
-});
 
 const log = std.log.scoped(.mixos);
 
