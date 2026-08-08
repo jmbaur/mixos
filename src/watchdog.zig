@@ -1,6 +1,7 @@
+const linux = @import("linux.zig");
+const posix = std.posix;
 const std = @import("std");
 const system = std.os.linux;
-const posix = std.posix;
 const C = @cImport({
     @cInclude("linux/watchdog.h");
 });
@@ -9,7 +10,7 @@ const log = std.log.scoped(.mixos);
 
 const Watchdog = @This();
 
-inner: std.Io.File,
+inner: linux.Watchdog,
 epoll: posix.fd_t,
 timer: posix.fd_t,
 event: posix.fd_t,
@@ -17,7 +18,7 @@ thread: std.Thread,
 
 const Outcome = enum { done, keep_going };
 
-fn handleEvent(watchdog: posix.fd_t, timer: posix.fd_t, event: posix.fd_t) Outcome {
+fn handleEvent(watchdog: *linux.Watchdog, timer: posix.fd_t, event: posix.fd_t) Outcome {
     _ = watchdog;
     _ = timer;
 
@@ -27,10 +28,10 @@ fn handleEvent(watchdog: posix.fd_t, timer: posix.fd_t, event: posix.fd_t) Outco
     return .done;
 }
 
-fn handleTimer(watchdog: posix.fd_t, timer: posix.fd_t, event: posix.fd_t) Outcome {
+fn handleTimer(watchdog: *linux.Watchdog, timer: posix.fd_t, event: posix.fd_t) Outcome {
     _ = event;
 
-    _ = system.ioctl(watchdog, C.WDIOC_KEEPALIVE, 0);
+    watchdog.keepAlive() catch {};
     log.debug("watchdog ping", .{});
 
     var expirations: u64 = 0;
@@ -40,15 +41,14 @@ fn handleTimer(watchdog: posix.fd_t, timer: posix.fd_t, event: posix.fd_t) Outco
 }
 
 fn run(
-    watchdog: posix.fd_t,
+    watchdog: *linux.Watchdog,
     epoll: posix.fd_t,
     timer: posix.fd_t,
     event: posix.fd_t,
 ) void {
-    _ = system.ioctl(watchdog, C.WDIOC_SETOPTIONS, @intFromPtr(&C.WDIOS_ENABLECARD));
+    watchdog.setOptions(.{ .enable_card = true }) catch return;
 
-    var watchdog_timeout: u32 = 0;
-    _ = system.ioctl(watchdog, C.WDIOC_GETTIMEOUT, @intFromPtr(&watchdog_timeout));
+    const watchdog_timeout = watchdog.getTimeout() catch 0;
 
     const timer_timeout: isize = @intCast(std.math.clamp(watchdog_timeout, 10, 60) / 2);
 
@@ -84,7 +84,7 @@ fn run(
     outer: while (true) {
         const num_events = system.epoll_wait(epoll, &events, events.len, -1);
         for (events[0..num_events]) |e| {
-            const func: *const fn (posix.fd_t, posix.fd_t, posix.fd_t) Outcome = @ptrFromInt(e.data.ptr);
+            const func: *const fn (*linux.Watchdog, posix.fd_t, posix.fd_t) Outcome = @ptrFromInt(e.data.ptr);
             switch (func(watchdog, timer, event)) {
                 .keep_going => continue,
                 .done => break :outer,
@@ -94,8 +94,8 @@ fn run(
 }
 
 pub fn init(io: std.Io) !Watchdog {
-    const inner = try std.Io.Dir.cwd().openFile(io, "/dev/watchdog", .{ .mode = .read_write });
-    errdefer inner.close(io);
+    var watchdog = try linux.Watchdog.init(io);
+    errdefer watchdog.deinit(io);
 
     const epoll: posix.fd_t = @intCast(system.epoll_create1(system.EPOLL.CLOEXEC));
     errdefer _ = system.close(epoll);
@@ -107,14 +107,14 @@ pub fn init(io: std.Io) !Watchdog {
     errdefer _ = system.close(event);
 
     const thread = try std.Thread.spawn(.{}, run, .{
-        inner.handle,
+        &watchdog,
         epoll,
         timer,
         event,
     });
 
     return .{
-        .inner = inner,
+        .inner = watchdog,
         .epoll = epoll,
         .timer = timer,
         .event = event,
@@ -122,26 +122,19 @@ pub fn init(io: std.Io) !Watchdog {
     };
 }
 
-pub fn disarm(self: *Watchdog, io: std.Io) void {
-    switch (system.errno(system.ioctl(self.inner.handle, C.WDIOC_SETOPTIONS, @intFromPtr(&C.WDIOS_DISABLECARD)))) {
-        .SUCCESS, .BUSY => {
-            // we get EBUSY if NOWAYOUT is enabled on the watchdog
-        },
-        else => |err| log.err("failed to disable watchdog: {}", .{err}),
-    }
-
-    self.inner.close(io);
-    self.deinit();
-}
-
 /// Will trigger the watchdog since we stop pinging to it. To disarm the
 /// watchdog, call disarm() instead.
-pub fn deinit(self: *Watchdog) void {
+pub fn deinit(self: *Watchdog, io: std.Io, opts: struct { disarm: bool = true }) void {
     var value: u64 = 1;
     _ = system.write(self.event, std.mem.asBytes(&value), @sizeOf(@TypeOf(value)));
     self.thread.join();
     _ = system.close(self.epoll);
     _ = system.close(self.timer);
     _ = system.close(self.event);
+
+    if (opts.disarm) {
+        self.inner.deinit(io);
+    }
+
     self.* = undefined;
 }

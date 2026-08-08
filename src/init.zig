@@ -3,6 +3,7 @@ const Mount = @import("mount.zig");
 const Watchdog = @import("watchdog.zig");
 const builtin = @import("builtin");
 const kmsg = @import("kmsg.zig");
+const linux = @import("linux.zig");
 const netlink = @import("netlink.zig");
 const posix = std.posix;
 const process = @import("process.zig");
@@ -252,15 +253,15 @@ inline fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     }
 
     // move pseudofilesystems into final root filesystem
-    try Mount.move_mount(root_dir.handle, "dev", sysroot_dir.handle, "dev", 0);
-    try Mount.move_mount(root_dir.handle, "sys", sysroot_dir.handle, "sys", 0);
-    try Mount.move_mount(root_dir.handle, "proc", sysroot_dir.handle, "proc", 0);
+    try linux.moveMount(root_dir.handle, "dev", sysroot_dir.handle, "dev", 0);
+    try linux.moveMount(root_dir.handle, "sys", sysroot_dir.handle, "sys", 0);
+    try linux.moveMount(root_dir.handle, "proc", sysroot_dir.handle, "proc", 0);
 
     log.debug("removing remnants of initramfs", .{});
     removeAllContent(io, std.Io.Dir.cwd(), "/", sysroot_dir);
 
     // overmount current root
-    try Mount.move_mount(sysroot_dir.handle, ".", root_dir.handle, "/", 0);
+    try linux.moveMount(sysroot_dir.handle, ".", root_dir.handle, "/", 0);
 
     // TODO(jared): enumerate all possible errors
     switch (system.errno(system.chroot("."))) {
@@ -317,7 +318,7 @@ fn mountPseudoFilesystems(io: std.Io) void {
     }
 
     b: {
-        Mount.mount(
+        linux.mount(
             "configfs",
             "/sys/kernel/config",
             "configfs",
@@ -327,7 +328,7 @@ fn mountPseudoFilesystems(io: std.Io) void {
     }
 
     b: {
-        Mount.mount(
+        linux.mount(
             "debugfs",
             "/sys/kernel/debug",
             "debugfs",
@@ -337,7 +338,7 @@ fn mountPseudoFilesystems(io: std.Io) void {
     }
 
     b: {
-        Mount.mount(
+        linux.mount(
             "tracefs",
             "/sys/kernel/tracing",
             "tracefs",
@@ -347,7 +348,7 @@ fn mountPseudoFilesystems(io: std.Io) void {
     }
 
     b: {
-        Mount.mount(
+        linux.mount(
             "securityfs",
             "/sys/kernel/security",
             "securityfs",
@@ -617,7 +618,7 @@ inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !v
     try std.Io.Dir.cwd().createDirPath(io, "/state/etc/upper");
     try std.Io.Dir.cwd().createDirPath(io, "/state/etc/work");
 
-    try Mount.umount("/etc");
+    try linux.umount("/etc");
     var etc_overlay = try Mount.init("overlay");
     try etc_overlay.setOption("lowerdir", lower_etc);
     try etc_overlay.setOption("upperdir", "/state/etc/upper");
@@ -737,10 +738,6 @@ fn setupService(io: std.Io, root_service_dir: std.Io.Dir, service_name: []const 
     try service_dir.symLink(io, run, "run", .{});
 }
 
-fn sethostname(hostname: []const u8) usize {
-    return system.syscall2(.sethostname, @intFromPtr(hostname.ptr), hostname.len);
-}
-
 fn extractHostname(etc_hostname_contents: []const u8) ?[]const u8 {
     var split = std.mem.splitScalar(u8, etc_hostname_contents, '\n');
     while (split.next()) |line| {
@@ -783,10 +780,7 @@ inline fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
     defer allocator.free(hostname_contents);
 
     if (extractHostname(hostname_contents)) |hostname| {
-        switch (system.errno(sethostname(hostname))) {
-            .SUCCESS => return,
-            else => |err| return posix.unexpectedErrno(err),
-        }
+        try linux.setHostname(hostname);
     }
 }
 
@@ -878,9 +872,6 @@ fn setupSystem(
 
     defer kmsg.deinit(init.io);
 
-    var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(init.io, w) else null;
-    errdefer if (watchdog) |*w| w.deinit();
-
     try setupRoot(init.io, allocator, root_dir, &manifest, store_blockdev);
 
     mountPseudoFilesystems(init.io);
@@ -892,6 +883,15 @@ fn setupSystem(
     loadModules(init.io, &manifest.boot) catch |err| {
         log.err("failed to load modules: {}", .{err});
     };
+
+    // We prepare the watchdog right after loading modules, just in
+    // case the list of modules the user wants to load includes any
+    // module(s) for the watchdog.
+    //
+    // TODO(jared): We should just spawn off a thread that continually tries
+    // for the duration of the setup.
+    var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(init.io, w) else null;
+    errdefer if (watchdog) |*w| w.deinit(init.io, .{ .disarm = false });
 
     mdevScan(init.io, allocator) catch |err| {
         log.err("failed to run mdev: {}", .{err});
@@ -913,7 +913,7 @@ fn setupSystem(
 
     log.debug("executing init {s}", .{manifest.init});
 
-    if (watchdog) |*w| w.disarm(init.io);
+    if (watchdog) |*w| w.deinit(init.io, .{ .disarm = true });
 
     return try stage2_init_allocator.dupeZ(u8, manifest.init);
 }

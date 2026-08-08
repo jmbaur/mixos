@@ -619,11 +619,15 @@ in
           action = "respawn";
           process = mkDefault "/bin/runsvdir -P /var/service";
         };
+      };
 
-        watchdog = mkIf config.boot.watchdog.enable {
-          action = "once";
-          process = mkDefault "/bin/watchdog -F /dev/watchdog";
-        };
+      services.watchdog = mkIf config.boot.watchdog.enable {
+        run = mkDefault (
+          pkgs.writeScript "watchdog-run" ''
+            #!/bin/sh
+            exec /bin/watchdog -F /dev/watchdog
+          ''
+        );
       };
 
       services.mdev.run = mkDefault (

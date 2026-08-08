@@ -82,13 +82,18 @@ pub fn main(init: std.process.Init) !void {
         "-cpu",     "max",
         "-smp",     "1",
         "-m",       "1G",
+        "-device",  "i6300esb",
         "-initrd",  try tmpdir.realPathFileAlloc(init.io, "mixos.initrd", arena_alloc),
         "-kernel",  kernel,
     });
 
+    var cmdline: std.ArrayList(u8) = .empty;
+    try cmdline.appendSlice(arena_alloc, "debug");
     if (builtin.target.cpu.arch == .x86_64) {
-        try qemu_args.appendSlice(arena_alloc, &.{ "-append", "console=ttyS0,115200" });
+        try cmdline.appendSlice(arena_alloc, " console=ttyS0,115200");
     }
+
+    try qemu_args.appendSlice(arena_alloc, &.{ "-append", cmdline.items });
 
     while (args.next()) |arg| {
         try qemu_args.append(arena_alloc, arg);

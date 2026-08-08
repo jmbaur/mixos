@@ -1,6 +1,7 @@
 const builtin = @import("builtin");
 const posix = std.posix;
 const std = @import("std");
+const linux = @import("linux.zig");
 const C = @cImport({
     @cInclude("sys/epoll.h");
 });
@@ -18,22 +19,6 @@ pub fn statusToTerm(status: u32) std.process.Child.Term {
         .{ .Stopped = posix.W.STOPSIG(status) }
     else
         .{ .Unknown = status };
-}
-
-fn pidfd_open(pid: posix.pid_t, flags: u32) !posix.fd_t {
-    const ret = std.os.linux.pidfd_open(pid, flags);
-    if (ret < 0) {
-        return switch (std.os.linux.errno(ret)) {
-            .INVAL => error.UnsupportedFlags,
-            .MFILE => error.ProcessFdQuotaExceeded,
-            .NFILE => error.SystemFdQuotaExceeded,
-            .NOMEM => error.OutOfMemory,
-            .SRCH => error.ProcessNotFound,
-            else => |err| posix.unexpectedErrno(err),
-        };
-    } else {
-        return @intCast(ret);
-    }
 }
 
 fn runChild(
@@ -68,16 +53,7 @@ fn runChild(
 fn handlePid(args: CallbackArgs) anyerror!?std.process.Child.Term {
     var siginfo: posix.system.siginfo_t = undefined;
 
-    while (true) {
-        switch (std.os.linux.errno(std.os.linux.waitid(.PIDFD, args.pidfd, &siginfo, posix.system.W.EXITED, null))) {
-            .SUCCESS => {},
-            .CHILD => return error.NoChildProcess,
-            .INTR => continue,
-            .INVAL => return error.InvalidArguments,
-            else => |err| return posix.unexpectedErrno(err),
-        }
-        break;
-    }
+    try linux.waitid(.PIDFD, args.pidfd, &siginfo, posix.system.W.EXITED, null);
 
     _ = posix.system.epoll_ctl(args.epoll, EPOLL.CTL_DEL, args.pidfd, null);
 
@@ -269,7 +245,7 @@ pub fn run(
             replace_opts,
         ),
         else => |pid| {
-            const pidfd = try pidfd_open(@intCast(pid), 0);
+            const pidfd = try linux.pidfdOpen(@intCast(pid), 0);
             defer _ = posix.system.close(pidfd);
 
             _ = posix.system.epoll_ctl(

@@ -11,7 +11,6 @@ let
     getExe
     kernel
     mapAttrs
-    mkDefault
     mkOption
     optionalString
     optionals
