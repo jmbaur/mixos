@@ -49,12 +49,15 @@ fn run(
 
     const timer_timeout: isize = @intCast(std.math.clamp(watchdog_timeout, 10, 60) / 2);
 
-    _ = system.timerfd_settime(
+    linux.timerfdSetTime(
         timer,
         .{},
         &.{ .it_value = .{ .sec = timer_timeout, .nsec = 0 }, .it_interval = .{ .sec = timer_timeout, .nsec = 0 } },
         null,
-    );
+    ) catch |err| {
+        log.err("failed to set watchdog ping timer: {}", .{err});
+        return;
+    };
 
     _ = system.epoll_ctl(
         epoll,

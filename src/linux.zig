@@ -184,8 +184,6 @@ pub fn loopbackGetFree(io: std.Io) !usize {
         .SUCCESS => return loop_nr,
         else => |err| return posix.unexpectedErrno(err),
     }
-
-    return error.Todo;
 }
 
 pub fn loopbackSetFD(loopback_device: posix.fd_t, handle: posix.fd_t) !void {
@@ -226,9 +224,20 @@ pub fn sendfile(outfd: posix.fd_t, infd: posix.fd_t, offset: ?*i64, count: u64) 
     const ret = system.sendfile(outfd, infd, offset, @intCast(count));
     switch (system.errno(ret)) {
         .SUCCESS => return ret,
-        .INVAL => return error.Todo,
+        .INVAL => unreachable,
         .SPIPE => return error.Unseekable,
         .OVERFLOW => return error.CountTooBig,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn timerfdSetTime(fd: i32, flags: system.TFD.TIMER, new_value: *const system.itimerspec, old_value: ?*system.itimerspec) !void {
+    switch (system.errno(system.timerfd_settime(fd, flags, new_value, old_value))) {
+        .SUCCESS => {},
+        .INVAL => unreachable,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        .PERM => return error.PermissionDenied,
         else => |err| return posix.unexpectedErrno(err),
     }
 }

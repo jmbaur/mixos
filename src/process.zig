@@ -291,9 +291,9 @@ pub fn run(
             }
 
             if (opts.timeout) |seconds| {
-                _ = posix.system.timerfd_settime(
+                try linux.timerfdSetTime(
                     timerfd,
-                    0,
+                    .{},
                     &.{ .it_value = .{ .sec = @intCast(seconds), .nsec = 0 }, .it_interval = .{ .sec = 0, .nsec = 0 } },
                     null,
                 );
