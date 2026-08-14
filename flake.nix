@@ -147,8 +147,9 @@
 
           runnerMixos = inputs.self.lib.mixosSystem {
             modules = [
-              {
+              ({ lib, ... }: {
                 nixpkgs = { inherit pkgs; };
+
                 init.shell = {
                   action = "askfirst";
                   tty =
@@ -160,7 +161,16 @@
                       "/dev/console";
                   process = "/bin/sh";
                 };
-              }
+
+                # TODO(jared): Remove this once we have https://github.com/NixOS/nixpkgs/pull/546157
+                boot.kernelPatches = [
+                  {
+                    name = "module-decompress";
+                    patch = null;
+                    structuredExtraConfig.MODULE_DECOMPRESS = lib.kernel.yes;
+                  }
+                ];
+              })
             ];
           };
         in
