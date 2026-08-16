@@ -143,16 +143,6 @@ fn handleOutput(
     try output_writer.flush();
 }
 
-fn pidfd_send_signal(pidfd: posix.fd_t, signal: posix.SIG) !void {
-    switch (std.os.linux.errno(std.os.linux.pidfd_send_signal(pidfd, signal, null, 0))) {
-        .SUCCESS => {},
-        .PERM => return error.PermissionDenied,
-        .BADF, .INVAL => return error.InvalidArguments,
-        .SRCH => return error.ProcessNotFound,
-        else => |err| return posix.unexpectedErrno(err),
-    }
-}
-
 fn handleTimer(args: CallbackArgs) anyerror!?std.process.Child.Term {
     // Consume the timer event
     var elapsed: u64 = 0;
@@ -160,7 +150,7 @@ fn handleTimer(args: CallbackArgs) anyerror!?std.process.Child.Term {
 
     _ = posix.system.epoll_ctl(args.epoll, EPOLL.CTL_DEL, args.timerfd, null);
 
-    try pidfd_send_signal(args.pidfd, posix.SIG.TERM);
+    try linux.pidfdSendSignal(args.pidfd, posix.SIG.TERM);
 
     args.state.process_timeout = true;
 
@@ -320,7 +310,7 @@ pub fn run(
                     if (state.process_complete) {
                         return if (state.process_timeout) error.Timeout else ret;
                     } else {
-                        try pidfd_send_signal(pidfd, posix.SIG.KILL);
+                        try linux.pidfdSendSignal(pidfd, posix.SIG.KILL);
                     }
                 }
 

@@ -160,6 +160,15 @@ pub fn pidfdOpen(pid: posix.pid_t, flags: u32) !posix.fd_t {
     }
 }
 
+pub fn pidfdSendSignal(pidfd: posix.fd_t, signal: posix.SIG) !void {
+    switch (std.os.linux.errno(std.os.linux.pidfd_send_signal(pidfd, signal, null, 0))) {
+        .SUCCESS => {},
+        .PERM => return error.PermissionDenied,
+        .BADF, .INVAL => return error.InvalidArguments,
+        .SRCH => return error.ProcessNotFound,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
 pub fn waitid(id_type: system.P, id: i32, infop: *system.siginfo_t, flags: u32, usage: ?*system.rusage) !void {
     while (true) {
         switch (system.errno(system.waitid(id_type, id, infop, flags, usage))) {
