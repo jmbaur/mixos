@@ -100,7 +100,7 @@ const Context = struct {
                 else => return err,
             };
 
-            log.debug("process ended with term {}", .{term});
+            log.debug("process ended with status {}", .{term});
 
             try request_context.serializeResponse(.{
                 .exit_code = switch (term) {
