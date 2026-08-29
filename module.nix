@@ -800,6 +800,8 @@ in
             ];
 
             buildCommand = ''
+              echo "Using kernel configuration '${kernelPackage.configfile}'"
+
               # Make build-time assertions on kernel configuration, since
               # evaluation-time access to kernel configuration is limited.
               kconfig ${kernelPackage.configfile} ${
@@ -824,7 +826,7 @@ in
               # We do it like this as opposed to conditionally including
               # assertions at evaluation time since we cannot depend on having
               # access to the full configuration at evaluation time.
-              if kconfig --assert-yes MODULE_COMPRESS 2>/dev/null; then
+              if kconfig ${kernelPackage.configfile} --assert-yes MODULE_COMPRESS 2>/dev/null; then
                 kconfig ${kernelPackage.configfile} --assert-yes MODULE_DECOMPRESS
               fi
 
