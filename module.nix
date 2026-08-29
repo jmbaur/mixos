@@ -751,7 +751,13 @@ in
           "/lib"
           "/share"
         ];
-        ignoreCollisions = true;
+        ignoreCollisions = false;
+        postBuild = ''
+          for dir in bin sbin; do
+            rm -f $out/$dir/modprobe
+            ln -sf $out/bin/mixos $out/$dir/modprobe
+          done
+        '';
       };
 
       system.build.initrd = checkAssertWarn config.assertions config.warnings (
