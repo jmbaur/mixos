@@ -157,9 +157,23 @@ pub fn modprobe(self: *Kmod, module_query: []const u8) !void {
 
         const name = std.mem.span(C.kmod_module_get_name(module));
 
+        const module_state = C.kmod_module_get_initstate(module);
+
+        switch (module_state) {
+            C.KMOD_MODULE_BUILTIN => {
+                log.debug("module is builtin: {s}", .{name});
+                continue;
+            },
+            C.KMOD_MODULE_LIVE => {
+                log.debug("module is already loaded: {s}", .{name});
+                continue;
+            },
+            else => {},
+        }
+
         if (std.enums.fromInt(std.posix.E, @abs(C.kmod_module_probe_insert_module(
             module,
-            C.KMOD_PROBE_APPLY_BLACKLIST_ALIAS_ONLY,
+            C.KMOD_PROBE_APPLY_BLACKLIST,
             null,
             null,
             null,
