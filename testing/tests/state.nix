@@ -30,8 +30,14 @@
     machine = mixos_machines.get("machine")
 
     try:
+        machine.start(allow_reboot=True)
         machine.succeed("test -b /dev/vda")
         machine.succeed("mount | grep '/dev/vda on /state type ext2'")
+        machine.succeed("touch /state/hi")
+        machine.succeed("reboot")
+        machine.connected = False
+        machine.connect()
+        machine.succeed("test -e /state/hi")
     except: raise
     finally:
         machine.shutdown()
