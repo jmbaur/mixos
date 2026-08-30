@@ -580,7 +580,7 @@ in
         # to allow for automatic kernel module
         # loading.
         ''
-          $MODALIAS=.* 0:0 660 @/bin/mixos modprobe "$MODALIAS"
+          $MODALIAS=.* 0:0 660 @/sbin/modprobe "$MODALIAS"
         ''
         # This is needed by many programs (e.g.
         # nologin) to be world-writeable.
