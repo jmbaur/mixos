@@ -28,7 +28,7 @@ stdenvNoCC.mkDerivation (
   in
   {
     pname = lib.concatStringsSep "-" ([ "mixos" ] ++ lib.optional buildTools "buildtools");
-    version = "1.8.4";
+    version = "1.9.0";
 
     src = lib.fileset.toSource {
       root = ./.;
