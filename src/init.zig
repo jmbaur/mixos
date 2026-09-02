@@ -213,6 +213,8 @@ inline fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     var sysroot_dir = try root_dir.openDir(io, "sysroot", .{});
     defer sysroot_dir.close(io);
 
+    try root_dir.copyFile("initrd_loaded_modules", sysroot_dir, "initrd_loaded_modules", io, .{});
+
     // TODO(jared): enumerate all possible errors
     switch (system.errno(system.fchdir(sysroot_dir.handle))) {
         .SUCCESS => {},
@@ -363,16 +365,27 @@ inline fn loadModules(io: std.Io, boot: *const BootConfig) !void {
         return;
     }
 
-    if (boot.kernelModules.len == 0) {
-        return;
-    }
-
     var kmod = try Kmod.init(.{});
     defer kmod.deinit();
 
     for (boot.kernelModules) |module| {
         kmod.modprobe(module) catch |err| switch (err) {
-            error.ModulesNotAvailable => break,
+            error.ModulesNotAvailable => return,
+            else => log.err("failed to load module {s}: {}", .{ module, err }),
+        };
+    }
+
+    var initrd_loaded_modules = try std.Io.Dir.cwd().openFile(
+        io,
+        "/initrd_loaded_modules",
+        .{},
+    );
+    defer initrd_loaded_modules.close(io);
+
+    var buf: [1024]u8 = undefined;
+    var reader = initrd_loaded_modules.reader(io, &buf);
+    while (try reader.interface.takeDelimiter('\n')) |module| {
+        kmod.modprobe(module) catch |err| switch (err) {
             else => log.err("failed to load module {s}: {}", .{ module, err }),
         };
     }
@@ -892,6 +905,17 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
         log.err("not running as PID1, refusing to continue", .{});
         @panic("PANIC");
     }
+
+    // Used by /sbin/modprobe to enqueue modules to be loaded in stage 2,
+    // helpful for when we don't yet have access to all kernel modules in the
+    // root filesystem, but the kernel wants to load modules via the userspace
+    // helper.
+    var initrd_loaded_modules = try std.Io.Dir.cwd().createFile(
+        init.io,
+        "/initrd_loaded_modules",
+        .{},
+    );
+    initrd_loaded_modules.close(init.io);
 
     var fba_buffer = std.mem.zeroes([std.fs.max_path_bytes]u8);
     var fba: std.heap.FixedBufferAllocator = .init(&fba_buffer);

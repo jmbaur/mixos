@@ -870,6 +870,10 @@ in
 
               install -Dm0755 ${getExe config.mixos.package} initrd/init
 
+              # The kernel might call request_module() from the initrd before we have access to any of our kernel modules in the root filesystem, thus we provide that userspace helper program here. All request_module() calls are queued up, handed off to "stage 2", then modprobe'd there.
+              mkdir initrd/sbin
+              (cd initrd/sbin && ln -sr ../init modprobe)
+
               jq -r '.env.manifest' <"$NIX_ATTRS_JSON_FILE" >initrd/manifest.json
               install -Dm0644 mixos.erofs initrd/mixos.erofs
               (cd initrd && find . -print0 | sort -z | cpio --quiet -o -H newc -R +0:+0 --reproducible --null | eval -- xz --check=crc32 --lzma2=dict=512KiB >> "$out/initrd")
