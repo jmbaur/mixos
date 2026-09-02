@@ -643,7 +643,7 @@ in
       services.klogd.run = mkDefault (
         pkgs.writeScript "klogd-run" ''
           #!/bin/sh
-          exec /bin/mdev -d -f -S
+          exec /bin/klogd -n
         ''
       );
 
