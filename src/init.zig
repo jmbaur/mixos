@@ -363,6 +363,20 @@ inline fn loadModules(io: std.Io, boot: *const BootConfig) !void {
         return;
     }
 
+    if (std.Io.Dir.cwd().openFile(
+        io,
+        "/proc/sys/kernel/modprobe",
+        .{ .mode = .write_only },
+    )) |modprobe| {
+        defer modprobe.close(io);
+        const modprobe_path = "/sbin/modprobe\n";
+        var writer = modprobe.writer(io, &.{});
+        writer.interface.writeAll(modprobe_path) catch {};
+        writer.interface.flush() catch {};
+    } else |err| {
+        log.err("failed to set modprobe path: {}", .{err});
+    }
+
     if (boot.kernelModules.len == 0) {
         return;
     }

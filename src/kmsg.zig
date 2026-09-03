@@ -21,8 +21,7 @@ pub fn init(io: std.Io) void {
         .{ .mode = .write_only },
     )) |printk_devkmsg| {
         defer printk_devkmsg.close(io);
-        var buf: [3]u8 = undefined;
-        var writer = printk_devkmsg.writer(io, &buf);
+        var writer = printk_devkmsg.writer(io, &.{});
         writer.interface.writeAll("on\n") catch {};
         writer.interface.flush() catch {};
     } else |_| {}
