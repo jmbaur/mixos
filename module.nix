@@ -113,6 +113,7 @@ in
   imports = [ (mkRenamedOptionModule [ "bin" ] [ "packages" ]) ];
 
   options = {
+    # TODO(jared): Use https://github.com/nixos/nixpkgs/blob/6e2d3fe12f15d592ebd45e721f65831232838b2e/lib/default.nix#L96 when we have it
     assertions = mkOption {
       type = types.listOf types.unspecified;
       internal = true;
