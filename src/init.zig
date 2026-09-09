@@ -15,27 +15,6 @@ const C = @cImport({
 
 const log = std.log.scoped(.mixos);
 
-fn findCmdline(cmdline: []const u8, want_key: []const u8) ?[]const u8 {
-    var entry_split = std.mem.tokenizeSequence(u8, cmdline, &std.ascii.whitespace);
-    while (entry_split.next()) |entry| {
-        var split = std.mem.splitScalar(u8, entry, '=');
-        const key = split.next() orelse continue;
-        const value = split.next() orelse continue;
-
-        if (std.mem.eql(u8, key, want_key)) {
-            return std.mem.trim(u8, value, &std.ascii.whitespace);
-        }
-    }
-
-    return null;
-}
-
-test findCmdline {
-    try std.testing.expectEqual(null, findCmdline("foo", ""));
-    try std.testing.expectEqualStrings("1", findCmdline("foo=1", "foo") orelse unreachable);
-    try std.testing.expectEqualStrings("1", findCmdline("foo=1 \t\n", "foo") orelse unreachable);
-}
-
 const WatchdogConfig = struct {};
 
 const BootConfig = struct {
@@ -80,7 +59,7 @@ const Manifest = struct {
     services: std.json.Value,
 };
 
-inline fn firstAvailableLoopDevice(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
+fn firstAvailableLoopDevice(io: std.Io, allocator: std.mem.Allocator) ![]const u8 {
     return try std.fmt.allocPrintSentinel(
         allocator,
         "/dev/loop{}",
@@ -89,7 +68,7 @@ inline fn firstAvailableLoopDevice(io: std.Io, allocator: std.mem.Allocator) ![]
     );
 }
 
-inline fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd: posix.fd_t, store_fs_source: []const u8) ![]const u8 {
+fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd: posix.fd_t, store_fs_source: []const u8) ![]const u8 {
     const store_fs = try std.Io.Dir.cwd().openFile(io, store_fs_source, .{});
     defer store_fs.close(io);
     const store_stat = try store_fs.stat(io);
@@ -146,65 +125,8 @@ fn mountStore(
     );
 }
 
-/// Save memory by removing all initramfs content, excluding sysroot, which we
-/// will switch to eventually.
-fn removeAllContent(io: std.Io, dir: std.Io.Dir, directory: []const u8, new_root: std.Io.Dir) void {
-    var old_root = dir.openDir(io, directory, .{ .iterate = true }) catch return;
-    defer old_root.close(io);
-
-    var new_root_statx = std.mem.zeroes(system.Statx);
-    switch (system.errno(system.statx(
-        new_root.handle,
-        ".",
-        0,
-        std.Io.Threaded.linux_statx_request,
-        &new_root_statx,
-    ))) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("stat on new root failed: {}", .{err});
-            return;
-        },
-    }
-
-    var entry_name_buf: [std.fs.max_path_bytes]u8 = undefined;
-
-    var iter = old_root.iterate();
-    while (iter.next(io) catch return) |entry| {
-        entry_name_buf = @splat(0);
-        std.mem.copyForwards(u8, &entry_name_buf, entry.name);
-
-        var entry_statx = std.mem.zeroes(system.Statx);
-        switch (system.errno(system.statx(
-            old_root.handle,
-            entry_name_buf[0..entry.name.len :0],
-            0,
-            std.Io.Threaded.linux_statx_request,
-            &entry_statx,
-        ))) {
-            .SUCCESS => {},
-            else => |err| {
-                log.warn("failed to stat entry {s}: {}", .{ entry.name, err });
-                continue;
-            },
-        }
-
-        // If the entry is on the new root filesystem, skip it.
-        if (entry_statx.dev_major == new_root_statx.dev_major and
-            entry_statx.dev_minor == new_root_statx.dev_minor)
-        {
-            continue;
-        }
-
-        old_root.deleteTree(io, entry.name) catch |err| {
-            log.warn("failed to delete {s}: {}", .{ entry.name, err });
-            continue;
-        };
-    }
-}
-
 /// Returns a handle to the new root directory.
-inline fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
+fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     try root_dir.createDirPath(io, "sysroot");
 
     var tmpfs = try Mount.init("tmpfs");
@@ -232,32 +154,11 @@ inline fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     try linux.moveMount(root_dir.handle, "sys", sysroot_dir.handle, "sys", 0);
     try linux.moveMount(root_dir.handle, "proc", sysroot_dir.handle, "proc", 0);
 
-    log.debug("removing remnants of initramfs", .{});
-    removeAllContent(io, std.Io.Dir.cwd(), "/", sysroot_dir);
-
-    // overmount current root
-    try linux.moveMount(sysroot_dir.handle, ".", root_dir.handle, "/", 0);
-
-    // TODO(jared): enumerate all possible errors
-    switch (system.errno(system.chroot("."))) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("failed to chroot: {s}", .{@tagName(err)});
-            return posix.unexpectedErrno(err);
-        },
-    }
-
-    // TODO(jared): enumerate all possible errors
-    switch (system.errno(system.chdir("/"))) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("failed to change directory to /: {s}", .{@tagName(err)});
-            return posix.unexpectedErrno(err);
-        },
-    }
+    try linux.pivotRoot(".", ".");
+    try linux.umount(".", system.MNT.DETACH);
 }
 
-inline fn setupRoot(
+fn setupRoot(
     io: std.Io,
     allocator: std.mem.Allocator,
     root_dir: std.Io.Dir,
@@ -351,13 +252,13 @@ fn mountPseudoFilesystems(io: std.Io) void {
 /// We need to have certain files exposed prior to loading kernel modules and
 /// running mdev (since kmod and mdev have optional configuration files), so we
 /// mount our etc hierarchy ahead of time here.
-inline fn premountEtc(lower_etc: []const u8) !void {
+fn premountEtc(lower_etc: []const u8) !void {
     var etc = try Mount.initTree(std.Io.Dir.cwd(), lower_etc);
     try etc.finish(std.Io.Dir.cwd(), "/etc", 0);
 }
 
 /// Load all kernel modules declared in the MixOS configuration.
-inline fn loadModules(io: std.Io, boot: *const BootConfig) !void {
+fn loadModules(io: std.Io, boot: *const BootConfig) !void {
     if (std.Io.Dir.cwd().access(io, "/proc/modules", .{})) {} else |_| {
         // kernel not built with modules support
         return;
@@ -392,7 +293,7 @@ inline fn loadModules(io: std.Io, boot: *const BootConfig) !void {
     }
 }
 
-inline fn mdevScan(io: std.Io, allocator: std.mem.Allocator) !void {
+fn mdevScan(io: std.Io, allocator: std.mem.Allocator) !void {
     const result = try std.process.run(allocator, io, .{
         .argv = &.{ "mdev", "-s", "-f" },
     });
@@ -473,7 +374,7 @@ const IndentedWriter = struct {
     }
 };
 
-inline fn initState(
+fn initState(
     io: std.Io,
     environ_map: *std.process.Environ.Map,
     allocator: std.mem.Allocator,
@@ -546,12 +447,12 @@ inline fn initState(
     try state_mount.finish(std.Io.Dir.cwd(), "/state", 0);
 }
 
-inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !void {
+fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !void {
     var state_dir = try root_dir.createDirPathOpen(io, "state", .{});
     defer state_dir.close(io);
 
     // Ensure /var, /root, and /home persists data back to /state
-    inline for ([_][]const u8{ "var", "root", "home" }) |dir_name| {
+    inline for (&.{ "var", "root", "home" }) |dir_name| {
         b: {
             state_dir.createDirPath(io, dir_name) catch |err| {
                 log.err("failed to create /state/{s} mount source: {}", .{ dir_name, err });
@@ -607,7 +508,7 @@ inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !v
     try std.Io.Dir.cwd().createDirPath(io, "/state/etc/upper");
     try std.Io.Dir.cwd().createDirPath(io, "/state/etc/work");
 
-    try linux.umount("/etc");
+    try linux.umount("/etc", system.MNT.FORCE);
     var etc_overlay = try Mount.init("overlay");
     try etc_overlay.setOption("lowerdir", lower_etc);
     try etc_overlay.setOption("upperdir", "/state/etc/upper");
@@ -629,7 +530,7 @@ inline fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !v
     };
 }
 
-inline fn setupServices(io: std.Io, allocator: std.mem.Allocator, services_value: std.json.Value) !void {
+fn setupServices(io: std.Io, allocator: std.mem.Allocator, services_value: std.json.Value) !void {
     var root_service_dir = try std.Io.Dir.cwd().createDirPathOpen(
         io,
         "/var/service",
@@ -757,7 +658,7 @@ test extractHostname {
 
 // /etc/hostname is described as a single-line, newline-terminated file
 // containing the hostname of the system, see hostname(5).
-inline fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
+fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
     const hostname_file = std.Io.Dir.cwd().openFile(io, "/etc/hostname", .{}) catch |err| switch (err) {
         error.FileNotFound => return,
         else => return err,
@@ -773,7 +674,7 @@ inline fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
     }
 }
 
-inline fn setupNetworking() !void {
+fn setupNetworking() !void {
     netlink.setInterfaceState("lo", .up) catch |err| switch (err) {
         error.MnlSocketOpen => {},
         else => return err,

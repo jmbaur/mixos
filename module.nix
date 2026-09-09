@@ -49,6 +49,7 @@ let
     textClosureMap
     types
     unique
+    versionAtLeast
     ;
 
   osReleaseFormat = pkgs.formats.keyValue { };
@@ -160,8 +161,8 @@ in
               });
             }
           );
-        default = pkgs.linuxPackages;
-        defaultText = "pkgs.linuxPackages";
+        default = pkgs.linuxPackages_7_2;
+        defaultText = "pkgs.linuxPackages_7_2";
         description = ''
           A kernel package-set containing a kernel attribute and optionally one
           or more kernel modules (à la pkgs.linuxPackagesFor ...).
@@ -512,6 +513,11 @@ in
       _module.args.pkgs = config.nixpkgs.pkgs;
 
       assertions = [
+        {
+          # For leveraging nullfs, to simplify initrd logic.
+          assertion = versionAtLeast config.boot.kernelPackages.kernel.version "7.0";
+          message = "MixOS requires Linux kernel version 7.0 or greater";
+        }
         {
           assertion =
             (config.boot.kernelModules != [ ] || config.boot.extraModulePackages != [ ]) -> hasModules;

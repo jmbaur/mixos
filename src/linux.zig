@@ -19,10 +19,12 @@ pub fn setHostname(hostname: []const u8) !void {
 }
 
 pub const Error = error{
-    NoChildProcess,
     FileNotFound,
     FilesystemFdUsed,
     InvalidArguments,
+    InvalidMountpoint,
+    NoChildProcess,
+    NotADirectory,
     OutOfMemory,
     PermissionDenied,
     UnsupportedFilesystem,
@@ -132,11 +134,19 @@ pub fn mount(
     }
 }
 
-pub fn umount(path: []const u8) Error!void {
-    var path_buf = std.mem.zeroes([std.fs.max_path_bytes]u8);
-    std.mem.copyForwards(u8, &path_buf, path);
-    const pathZ: [*:0]const u8 = path_buf[0..path.len :0];
-    switch (system.errno(system.umount2(pathZ, system.MNT.FORCE))) {
+pub fn pivotRoot(new: [:0]const u8, put_old: [:0]const u8) Error!void {
+    switch (system.errno(system.pivot_root(new, put_old))) {
+        .SUCCESS => {},
+        .BUSY => return error.InvalidMountpoint,
+        .INVAL => return Error.InvalidMountpoint,
+        .NOTDIR => return Error.NotADirectory,
+        .PERM => return Error.PermissionDenied,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn umount(path: [:0]const u8, flags: u32) Error!void {
+    switch (system.errno(system.umount2(path, flags))) {
         .SUCCESS => {},
         .INVAL => return Error.InvalidArguments,
         .NOMEM => return Error.OutOfMemory,
