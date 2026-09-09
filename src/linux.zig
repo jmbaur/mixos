@@ -30,6 +30,18 @@ pub const Error = error{
     UnsupportedFilesystem,
 } || posix.UnexpectedError;
 
+pub fn fchdir(dir: std.Io.Dir) Error!void {
+    while (true) {
+        return switch (system.errno(system.fchdir(dir.handle))) {
+            .SUCCESS => {},
+            .BADF => return Error.InvalidArguments,
+            .NOTDIR => return Error.NotADirectory,
+            .INTR => continue,
+            else => |err| return posix.unexpectedErrno(err),
+        };
+    }
+}
+
 pub fn fsopen(fsname: [*:0]const u8) Error!posix.fd_t {
     const ret = system.syscall2(.fsopen, @intFromPtr(fsname), C.FSOPEN_CLOEXEC);
     switch (system.errno(ret)) {

@@ -135,15 +135,6 @@ fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     var sysroot_dir = try root_dir.openDir(io, "sysroot", .{});
     defer sysroot_dir.close(io);
 
-    // TODO(jared): enumerate all possible errors
-    switch (system.errno(system.fchdir(sysroot_dir.handle))) {
-        .SUCCESS => {},
-        else => |err| {
-            log.err("failed to change directory to /sysroot: {s}", .{@tagName(err)});
-            return posix.unexpectedErrno(err);
-        },
-    }
-
     // Create directories that do not yet exist
     inline for (&.{ "dev", "sys", "proc" }) |path| {
         try sysroot_dir.createDirPath(io, path);
@@ -154,6 +145,7 @@ fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     try linux.moveMount(root_dir.handle, "sys", sysroot_dir.handle, "sys", 0);
     try linux.moveMount(root_dir.handle, "proc", sysroot_dir.handle, "proc", 0);
 
+    try linux.fchdir(sysroot_dir);
     try linux.pivotRoot(".", ".");
     try linux.umount(".", system.MNT.DETACH);
 }
