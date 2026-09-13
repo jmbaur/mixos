@@ -140,13 +140,16 @@ in
           {
             TMPFS = lib.kernel.yes;
             OVERLAY_FS = lib.kernel.module;
+            LOG_BUF_SHIFT = lib.kernel.freeform "18";
           }
         '';
         description = ''
           Attribute set of kernel Kconfig options that must be included in the
           kernel provided to mixos. Values (from lib.kernel) are asserted
           against the configured kernel, where lib.kernel.module is satisfied
-          with either 'y' or 'm'.
+          with either 'y' or 'm'. Non-tristate values (lib.kernel.freeform) are
+          asserted for equality, ignoring any quoting of string values. Options
+          marked as optional (lib.kernel.option) are not asserted.
         '';
       };
 
@@ -819,18 +822,38 @@ in
               # evaluation-time access to kernel configuration is limited.
               kconfig ${kernelPackage.configfile} ${
                 escapeShellArgs (
-                  mapAttrsToList (
-                    kconfig: value:
-                    if value.tristate == null then
-                      "--assert-unset ${kconfig}"
-                    else
-                      {
-                        "y" = "--assert-yes ${kconfig}";
-                        "m" = "--assert-yes-or-module ${kconfig}";
-                        "n" = "--assert-no ${kconfig}";
-                      }
-                      .${value.tristate}
-                  ) (filterAttrs (const (value: value ? freeform || value.optional)) config.boot.requiredKernelConfig)
+                  flatten (
+                    mapAttrsToList (
+                      kconfig: value:
+                      if value ? freeform then
+                        [
+                          "--assert-value"
+                          kconfig
+                          value.freeform
+                        ]
+                      else if value.tristate == null then
+                        [
+                          "--assert-unset"
+                          kconfig
+                        ]
+                      else
+                        {
+                          "y" = [
+                            "--assert-yes"
+                            kconfig
+                          ];
+                          "m" = [
+                            "--assert-yes-or-module"
+                            kconfig
+                          ];
+                          "n" = [
+                            "--assert-no"
+                            kconfig
+                          ];
+                        }
+                        .${value.tristate}
+                    ) (filterAttrs (const (value: !value.optional)) config.boot.requiredKernelConfig)
+                  )
                 )
               }
 
