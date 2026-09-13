@@ -153,6 +153,52 @@ def cli():
             exit(1)
 
 
+class SystemdUnsupportedError(Exception):
+    """
+    Raised when a test calls a systemd-only method of the NixOS test driver's
+    machine class on a MixOS machine.
+    """
+
+
+# The methods of the NixOS test driver's machine class that can only work on a
+# guest running systemd. MixOS machines don't run systemd, so calling any of
+# these is a mistake in the test rather than something that could ever succeed.
+SYSTEMD_MACHINE_METHODS = (
+    "get_unit_info",
+    "get_unit_property",
+    "require_unit_state",
+    "start_job",
+    "stop_job",
+    "switch_root",
+    "systemctl",
+    "wait_for_unit",
+    "wait_for_x",
+)
+
+
+def _systemd_stub(machine_name: str, method: str):
+    def stub(*args, **kwargs):
+        raise SystemdUnsupportedError(
+            f"{machine_name}.{method}() is a systemd-only method of the NixOS "
+            "test driver, and MixOS machines do not run systemd"
+        )
+
+    stub.__name__ = method
+    return stub
+
+
+def _stub_systemd_methods(name: str, machine):
+    """
+    Replaces the systemd-only methods of a machine with stubs that raise, so
+    that a test using one on a MixOS machine fails immediately and explicitly
+    instead of timing out on a command the guest cannot run.
+    """
+    for method in SYSTEMD_MACHINE_METHODS:
+        setattr(machine, method, _systemd_stub(name, method))
+
+    return machine
+
+
 def create_machines(driver_config_json: str, driver):
     """
     Creates the MixOS machines described by the driver configuration file and
@@ -163,7 +209,7 @@ def create_machines(driver_config_json: str, driver):
         driver_config = json.load(driver_config_file)
 
     machines = {
-        name: driver.create_machine(start, name=name)
+        name: _stub_systemd_methods(name, driver.create_machine(start, name=name))
         for name, start in driver_config["nodes"].items()
     }
 
