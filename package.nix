@@ -6,97 +6,64 @@
   buildTools ? false,
 }:
 
-# TODO(jared): use zig's setup hook once https://github.com/NixOS/nixpkgs/commit/1dfa28594068cde0031ac471c48da20a18c67cd1 is in a stable release.
-stdenvNoCC.mkDerivation (
-  finalAttrs:
-  let
-    deps = stdenvNoCC.mkDerivation {
-      pname = "mixos-deps";
-      inherit (finalAttrs) src version;
-      depsBuildBuild = [ zig_0_16 ];
-      buildCommand = ''
-        export ZIG_GLOBAL_CACHE_DIR=$(mktemp -d)
-        runHook unpackPhase
-        cd $sourceRoot
-        zig build --fetch
-        mv $ZIG_GLOBAL_CACHE_DIR/p $out
-      '';
-      outputHashAlgo = null;
-      outputHashMode = "recursive";
-      outputHash = "sha256-AibAg0fTfKpT4RHMLliocerMt932J+vJpKrIYtWsS4Q=";
-    };
-  in
-  {
-    pname = lib.concatStringsSep "-" ([ "mixos" ] ++ lib.optional buildTools "buildtools");
-    version = "1.10.0";
+stdenvNoCC.mkDerivation (finalAttrs: {
+  pname = lib.concatStringsSep "-" ([ "mixos" ] ++ lib.optional buildTools "buildtools");
+  version = "1.10.0";
 
-    src = lib.fileset.toSource {
-      root = ./.;
-      fileset = lib.fileset.unions [
-        ./build.zig
-        ./build.zig.zon
-        ./com.jmbaur.mixos.varlink
-        ./src
-      ];
-    };
-
-    __structuredAttrs = true;
-    doCheck = true;
-    strictDeps = true;
-
-    nativeBuildInputs = [
-      nukeReferences
-      zig_0_16
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.unions [
+      ./build.zig
+      ./build.zig.zon
+      ./com.jmbaur.mixos.varlink
+      ./src
     ];
+  };
 
-    # Prevent zig (or anything else) from being in the runtime closure
-    allowedReferences = [ ];
+  __structuredAttrs = true;
+  doCheck = true;
+  strictDeps = true;
 
-    zigBuildFlags = [
-      "--color off"
-      "-Doptimize=ReleaseSmall"
-      "-Dcpu=baseline"
-      "-Dbuildtools=${lib.boolToString buildTools}"
-      "-Dtarget=${
-        {
-          "armv7l-linux" = "arm-linux";
-        }
-        .${stdenvNoCC.hostPlatform.system} or stdenvNoCC.hostPlatform.system
-      }"
-    ];
+  nativeBuildInputs = [
+    nukeReferences
+    zig_0_16
+  ];
 
-    configurePhase = ''
-      runHook preConfigure
-      export ZIG_GLOBAL_CACHE_DIR=$TMPDIR
-      ln -s ${deps} $ZIG_GLOBAL_CACHE_DIR/p
-      runHook postConfigure
-    '';
+  # Prevent zig (or anything else) from being in the runtime closure
+  allowedReferences = [ ];
 
-    buildPhase = ''
-      runHook preBuild
-      zig build -j$NIX_BUILD_CORES ''${zigBuildFlags[@]}
-      runHook postBuild
-    '';
+  dontSetZigDefaultFlags = true;
 
-    checkPhase = ''
-      runHook preCheck
-      zig build test -j$NIX_BUILD_CORES ''${zigBuildFlags[@]}
-      runHook postCheck
-    '';
+  zigBuildFlags = [
+    "-Doptimize=ReleaseSmall"
+    "-Dcpu=baseline"
+    "-Dbuildtools=${lib.boolToString buildTools}"
+    "-Dtarget=${
+      {
+        "armv7l-linux" = "arm-linux";
+      }
+      .${stdenvNoCC.hostPlatform.system} or stdenvNoCC.hostPlatform.system
+    }"
+  ];
 
-    installPhase = ''
-      runHook preInstall
-      zig build install -j$NIX_BUILD_CORES --prefix "$out" ''${zigBuildFlags[@]}
-      runHook postInstall
-    '';
+  zigCheckFlags = finalAttrs.zigBuildFlags;
 
-    postFixup = ''
-      nuke-refs -e $out $out/bin/*
-    '';
+  postConfigure = ''
+    ln -s ${finalAttrs.passthru.deps} "$ZIG_GLOBAL_CACHE_DIR/p"
+  '';
 
-    meta = {
-      platforms = lib.platforms.linux;
-      mainProgram = "mixos";
-    };
-  }
-)
+  postFixup = ''
+    nuke-refs -e $out $out/bin/*
+  '';
+
+  passthru.deps = zig_0_16.fetchDeps {
+    pname = "mixos";
+    inherit (finalAttrs) src version;
+    hash = "sha256-AibAg0fTfKpT4RHMLliocerMt932J+vJpKrIYtWsS4Q=";
+  };
+
+  meta = {
+    platforms = lib.platforms.linux;
+    mainProgram = "mixos";
+  };
+})
