@@ -589,8 +589,17 @@ in
         # get their $MODALIAS value modprobed
         # to allow for automatic kernel module
         # loading.
+        #
+        # The leading "-" tells mdev to keep
+        # matching rules after this one. Without
+        # it, rule processing stops at the first
+        # match, so any uevent carrying a
+        # MODALIAS would never reach the rules
+        # below, and a device needing both its
+        # driver loaded and a rule of its own
+        # applied would only ever get the driver.
         ''
-          $MODALIAS=.* 0:0 660 @/sbin/modprobe "$MODALIAS"
+          -$MODALIAS=.* 0:0 660 @/sbin/modprobe "$MODALIAS"
         ''
         # This is needed by many programs (e.g.
         # nologin) to be world-writeable.

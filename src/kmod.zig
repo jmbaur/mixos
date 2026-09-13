@@ -160,14 +160,7 @@ pub fn modprobe(self: *Kmod, module_query: []const u8) !void {
         const module_state = C.kmod_module_get_initstate(module);
 
         switch (module_state) {
-            C.KMOD_MODULE_BUILTIN => {
-                log.debug("module is builtin: {s}", .{name});
-                continue;
-            },
-            C.KMOD_MODULE_LIVE => {
-                log.debug("module is already loaded: {s}", .{name});
-                continue;
-            },
+            C.KMOD_MODULE_BUILTIN, C.KMOD_MODULE_LIVE => continue,
             else => {},
         }
 

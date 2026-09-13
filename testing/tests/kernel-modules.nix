@@ -28,6 +28,12 @@
 
       # Ensure that our comment above is accurate.
       boot.requiredKernelConfig.I2C = lib.kernel.yes;
+
+      # The IDE controller of qemu's default machine is present before
+      # userspace starts, and ata_piix is deliberately left out of
+      # boot.kernelModules: the machine is expected to work out what it needs
+      # from the device itself.
+      boot.requiredKernelConfig.ATA_PIIX = lib.kernel.module;
     };
 
   testScript = ''
@@ -43,5 +49,10 @@
 
     # builtin driver fails to load
     machine.succeed("dmesg | grep 'failed to load module i2c'")
+
+    # a driver nobody asked for is loaded from the modalias of its device along with
+    # everything it depends on
+    machine.succeed("grep -q '^ata_piix ' /proc/modules")
+    machine.succeed("grep -q '^libata ' /proc/modules")
   '';
 }

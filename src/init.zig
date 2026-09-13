@@ -285,6 +285,91 @@ fn loadModules(io: std.Io, boot: *const BootConfig) !void {
     }
 }
 
+/// The longest a sysfs attribute can be.
+const modalias_max_len = 4096;
+
+/// A pass that turns up no new modalias ends the loop, so this is only here to
+/// keep a device tree that somehow keeps growing from hanging the boot.
+const max_device_module_passes = 8;
+
+/// Load the modules for the devices the kernel has already found.
+///
+/// The kernel does not use request_module() to bind a driver to a device: it
+/// announces the device with a uevent carrying a MODALIAS and leaves the
+/// loading to userspace. Every device the kernel registers before mdev is
+/// listening would go without its driver, so ask the devices themselves what
+/// they need. Devices that turn up later are covered by the $MODALIAS rule in
+/// mdev.conf.
+fn loadDeviceModules(io: std.Io, allocator: std.mem.Allocator) !void {
+    if (std.Io.Dir.cwd().access(io, "/proc/modules", .{})) {} else |_| {
+        // kernel not built with modules support
+        return;
+    }
+
+    var devices = try std.Io.Dir.cwd().openDir(io, "/sys/devices", .{ .iterate = true });
+    defer devices.close(io);
+
+    var kmod = try Kmod.init(.{});
+    defer kmod.deinit();
+
+    // Loading a module registers new devices, since a controller brings up the
+    // bus below it, and those come with modaliases of their own. Keep going
+    // until a pass turns up nothing new.
+    var seen: std.StringArrayHashMapUnmanaged(void) = .empty;
+    defer seen.deinit(allocator);
+
+    for (0..max_device_module_passes) |_| {
+        var found_new = false;
+
+        var walker = try devices.walk(allocator);
+        defer walker.deinit();
+
+        while (true) {
+            // A device can be unregistered while we walk over it, which is not
+            // a reason to give up on the rest of them: the next pass picks up
+            // wherever this one left off.
+            const next = walker.next(io) catch |err| {
+                log.debug("walking /sys/devices failed: {}", .{err});
+                break;
+            };
+
+            const entry = next orelse break;
+
+            if (entry.kind != .file or !std.mem.eql(u8, entry.basename, "modalias")) {
+                continue;
+            }
+
+            var buf: [modalias_max_len]u8 = undefined;
+            const contents = entry.dir.readFile(io, entry.basename, &buf) catch |err| {
+                log.debug("failed to read {s}: {}", .{ entry.path, err });
+                continue;
+            };
+
+            const modalias = std.mem.trim(u8, contents, &std.ascii.whitespace);
+            if (modalias.len == 0 or seen.contains(modalias)) {
+                continue;
+            }
+
+            try seen.put(allocator, try allocator.dupe(u8, modalias), void{});
+            found_new = true;
+
+            kmod.modprobe(modalias) catch |err| switch (err) {
+                // Plenty of devices have no module to go with them.
+                error.ModuleNotFound,
+                error.InvalidModuleAlias,
+                error.InvalidModuleLookup,
+                => {},
+                error.ModulesNotAvailable => return,
+                else => log.debug("failed to load module for '{s}': {}", .{ modalias, err }),
+            };
+        }
+
+        if (!found_new) {
+            return;
+        }
+    }
+}
+
 fn mdevScan(io: std.Io, allocator: std.mem.Allocator) !void {
     const result = try std.process.run(allocator, io, .{
         .argv = &.{ "mdev", "-s", "-f" },
@@ -765,6 +850,12 @@ fn setupSystem(
     // for the duration of the setup.
     var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(init.io, w) else null;
     errdefer if (watchdog) |*w| w.deinit(init.io, .{ .disarm = false });
+
+    // Runs after the watchdog is armed, since walking every device the kernel
+    // found and loading what it asks for can take a while.
+    loadDeviceModules(init.io, allocator) catch |err| {
+        log.err("failed to load device modules: {}", .{err});
+    };
 
     mdevScan(init.io, allocator) catch |err| {
         log.err("failed to run mdev: {}", .{err});
