@@ -23,15 +23,10 @@
   testScript = ''
     import mixos
 
-    mixos_machines = mixos.create_machines("${config.mixos.driverConfiguration}", create_machine)
-    machine = mixos_machines.get("machine")
+    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
 
-    try:
-        machine.start()
-        machine.wait_for_console_text("mixos: state initialization failed")
-        machine.wait_for_shutdown() # machine should shut down on its own after watchdog timeout
-    except: raise
-    finally:
-        machine.release()
+    machine.start()
+    machine.wait_for_console_text("mixos: state initialization failed")
+    machine.wait_for_shutdown() # machine should shut down on its own after watchdog timeout
   '';
 }

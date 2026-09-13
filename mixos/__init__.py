@@ -153,10 +153,23 @@ def cli():
             exit(1)
 
 
-def create_machines(driver_config_json: str, create_machine):
+def create_machines(driver_config_json: str, driver):
+    """
+    Creates the MixOS machines described by the driver configuration file and
+    registers them with the NixOS test driver, so that they are torn down
+    along with the NixOS VM nodes when the test ends.
+    """
     with open(driver_config_json) as driver_config_file:
         driver_config = json.load(driver_config_file)
-        return {
-            name: create_machine(start, name=name)
-            for name, start in driver_config["nodes"].items()
-        }
+
+    machines = {
+        name: driver.create_machine(start, name=name)
+        for name, start in driver_config["nodes"].items()
+    }
+
+    # The test driver only releases the machines it knows about, and machines
+    # made with Driver.create_machine() are not registered anywhere, so do it
+    # here on the caller's behalf.
+    driver.machines_qemu.extend(machines.values())
+
+    return machines

@@ -6,16 +6,9 @@
   testScript = ''
     import mixos
 
-    mixos_machines = mixos.create_machines("${config.mixos.driverConfiguration}", create_machine)
-    machine = mixos_machines.get("machine")
+    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
 
-    try:
-        machine.succeed("hello")
-        machine.fail("helloo")
-    except: raise
-    finally:
-        machine.shutdown()
-        machine.wait_for_shutdown()
-        machine.release()
+    machine.succeed("hello")
+    machine.fail("helloo")
   '';
 }

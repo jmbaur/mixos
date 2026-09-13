@@ -177,11 +177,16 @@ let
         runtimeInputs = [ config.qemu.package ];
         text = ''
           ${optionalString (diskImage != null) ''
-            MIXOS_DISK_IMAGE=$(mktemp -p "''${TMPDIR:-/tmp}" mixos-${name}-disk-XXXX)
-            qemu-img create -f qcow2 "$MIXOS_DISK_IMAGE" ${toString diskImage}B
+            # The test driver points TMPDIR at the machine's state directory,
+            # which it wipes before each run (unless --keep-machine-state is
+            # passed), so the disk image cleans itself up.
+            MIXOS_DISK_IMAGE="''${TMPDIR:-/tmp}/mixos-${name}-disk.qcow2"
+            if ! test -e "$MIXOS_DISK_IMAGE"; then
+              qemu-img create -f qcow2 "$MIXOS_DISK_IMAGE" ${toString diskImage}B
+            fi
           ''}
           exec qemu-kvm ${qemuOpts} \
-            ${optionalString (diskImage != null) ''-drive "file=$MIXOS_DISK_IMAGE,if=virtio"''} \
+            ${optionalString (diskImage != null) ''-drive "file=$MIXOS_DISK_IMAGE,if=virtio,format=qcow2"''} \
             "$@"
         '';
       }

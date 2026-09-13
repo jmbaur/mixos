@@ -30,17 +30,10 @@
   testScript = ''
     import mixos
 
-    mixos_machines = mixos.create_machines("${config.mixos.driverConfiguration}", create_machine)
-    machine = mixos_machines.get("machine")
+    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
 
-    try:
-        assert "uid=0" in machine.succeed("su -l root -c id")
-        assert "uid=1" in machine.succeed("su -l foo -c id")
-        machine.fail("su -l bar -c id")
-    except: raise
-    finally:
-        machine.shutdown()
-        machine.wait_for_shutdown()
-        machine.release()
+    assert "uid=0" in machine.succeed("su -l root -c id")
+    assert "uid=1" in machine.succeed("su -l foo -c id")
+    machine.fail("su -l bar -c id")
   '';
 }

@@ -33,22 +33,15 @@
   testScript = ''
     import mixos
 
-    mixos_machines = mixos.create_machines("${config.mixos.driverConfiguration}", create_machine)
-    machine = mixos_machines.get("machine")
+    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
 
-    try:
-        # kernel module options are set correctly
-        assert "Y" == machine.succeed("cat /sys/module/nvme_tcp/parameters/wq_unbound").strip()
+    # kernel module options are set correctly
+    assert "Y" == machine.succeed("cat /sys/module/nvme_tcp/parameters/wq_unbound").strip()
 
-        # out-of-tree module loads successfully
-        machine.succeed("lsmod | grep jool")
+    # out-of-tree module loads successfully
+    machine.succeed("lsmod | grep jool")
 
-        # builtin driver fails to load
-        machine.succeed("dmesg | grep 'failed to load module i2c'")
-    except: raise
-    finally:
-        machine.shutdown()
-        machine.wait_for_shutdown()
-        machine.release()
+    # builtin driver fails to load
+    machine.succeed("dmesg | grep 'failed to load module i2c'")
   '';
 }
