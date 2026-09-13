@@ -1,9 +1,9 @@
 const std = @import("std");
 
 const C = @cImport({
+    @cInclude("stdio.h");
     @cInclude("syslog.h");
     @cInclude("libkmod/libkmod.h");
-    @cInclude("kmod-log-wrapper.h");
 });
 
 const log = std.log.scoped(.mixos);
@@ -13,11 +13,33 @@ const Kmod = @This();
 
 ctx: *C.kmod_ctx,
 
-// Since zig does not have a great story for va_args with C interoperability
-// (yet), we provide this function as the userdata to kmod's logging
-// infrastructure to a C function that does the processing of va_args.
-fn kmodLogUnwrapped(priority: c_int, content: [*c]const u8) callconv(.c) void {
-    const log_content = std.mem.trim(u8, std.mem.span(content), &std.ascii.whitespace);
+// Zig has no portable way of spelling out C's `va_list`, so we pull the type
+// out of the log callback's signature as translated for the current target.
+const KmodLogFn = @typeInfo(@typeInfo(@TypeOf(C.kmod_set_log_fn)).@"fn".params[1].type.?).optional.child;
+const VaList = @typeInfo(@typeInfo(KmodLogFn).pointer.child).@"fn".params[6].type.?;
+
+// Longer messages get truncated, kmod's log messages are well within this.
+const log_buf_size = 1024;
+
+fn kmodLog(
+    data: ?*anyopaque,
+    priority: c_int,
+    file: [*c]const u8,
+    line: c_int,
+    func: [*c]const u8,
+    format: [*c]const u8,
+    args: VaList,
+) callconv(.c) void {
+    _ = .{ data, file, line, func };
+
+    var buf: [log_buf_size]u8 = undefined;
+    const rc = C.vsnprintf(&buf, buf.len, format, args);
+    if (rc < 0) {
+        return;
+    }
+
+    const len = @min(@as(usize, @intCast(rc)), buf.len - 1);
+    const log_content = std.mem.trim(u8, buf[0..len], &std.ascii.whitespace);
 
     switch (priority) {
         C.LOG_EMERG, C.LOG_ALERT, C.LOG_CRIT, C.LOG_ERR => kmod_log.err("{s}", .{log_content}),
@@ -35,7 +57,7 @@ pub fn init(opts: struct { root: ?[]const u8 = null }) !Kmod {
         break :b C.kmod_new(root[0..path.len :0], null);
     } else C.kmod_new(null, null)) orelse return error.KmodNew;
 
-    C.kmod_set_log_fn(kmod_ctx, C.kmod_log_wrapper, &kmodLogUnwrapped);
+    C.kmod_set_log_fn(kmod_ctx, &kmodLog, null);
 
     // Set the maximum log level so we can do all the filtering on the zig side
     C.kmod_set_log_priority(kmod_ctx, C.LOG_NOTICE);
