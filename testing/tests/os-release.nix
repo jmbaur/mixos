@@ -1,4 +1,4 @@
-{ config, ... }: {
+_: {
   name = "mixos-os-release";
 
   mixos.nodes.machine = {
@@ -6,10 +6,6 @@
   };
 
   testScript = ''
-    import mixos
-
-    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
-
     machine.succeed("grep '^ID=mixos$' /etc/os-release")
     machine.succeed("grep '^VERSION_ID=' /etc/os-release")
     machine.succeed("grep '^EXPERIMENT=test$' /etc/os-release")

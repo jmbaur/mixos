@@ -1,4 +1,4 @@
-{ config, ... }: {
+_: {
   name = "mixos-network";
 
   mixos.nodes.machine = { lib, ... }: {
@@ -6,10 +6,6 @@
   };
 
   testScript = ''
-    import mixos
-
-    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
-
     machine.succeed("ip link show dev lo | grep 'LOOPBACK,UP'")
   '';
 }

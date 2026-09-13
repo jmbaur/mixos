@@ -1,4 +1,4 @@
-{ config, ... }: {
+_: {
   name = "mixos-state";
 
   mixos.nodes.machine = { pkgs, ... }: {
@@ -24,10 +24,6 @@
   };
 
   testScript = ''
-    import mixos
-
-    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
-
     machine.start(allow_reboot=True)
     machine.succeed("test -b /dev/vda")
     machine.succeed("mount | grep '/dev/vda on /state type ext2'")

@@ -1,5 +1,4 @@
-{ config, ... }:
-{
+_: {
   name = "mixos-vde-network";
 
   nodes.nixosnode = {
@@ -16,12 +15,6 @@
   mixos.nodes.machine2.virtualisation.vlans = [ 2 ];
 
   testScript = ''
-    import mixos
-
-    mixos_machines = mixos.create_machines("${config.mixos.driverConfiguration}", driver)
-    machine1 = mixos_machines["machine1"]
-    machine2 = mixos_machines["machine2"]
-
     start_all()
     nixosnode.wait_for_unit("network.target")
 

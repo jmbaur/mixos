@@ -1,4 +1,4 @@
-{ config, ... }: {
+_: {
   name = "mixos-watchdog";
 
   mixos.nodes.machine = { lib, pkgs, ... }: {
@@ -21,10 +21,6 @@
   };
 
   testScript = ''
-    import mixos
-
-    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
-
     machine.start()
     machine.wait_for_console_text("mixos: state initialization failed")
     machine.wait_for_shutdown() # machine should shut down on its own after watchdog timeout

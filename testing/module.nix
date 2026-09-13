@@ -12,7 +12,9 @@ let
     concatMap
     concatMapAttrsStringSep
     concatMapStrings
+    concatMapStringsSep
     concatStringsSep
+    elem
     escapeShellArgs
     filter
     flatten
@@ -23,6 +25,7 @@ let
     listToAttrs
     mapAttrs
     mapAttrs'
+    mkBefore
     mkDefault
     mkIf
     mkOption
@@ -32,6 +35,8 @@ let
     optionals
     range
     remove
+    stringAsChars
+    substring
     toLower
     types
     unique
@@ -49,11 +54,22 @@ let
   # NixOS, which is exactly what the MixOS machines are.
   guestNetworkingOptions = "${hostPkgs.path}/nixos/modules/virtualisation/guest-networking-options.nix";
 
+  # The test driver exposes each machine to the test script under a name made
+  # into a python identifier this way. See <nixpkgs/nixos/lib/testing/driver.nix>.
+  pythonizeName =
+    name:
+    let
+      first = substring 0 1 name;
+      rest = substring 1 (-1) name;
+    in
+    (if builtins.match "[A-z_]" first == null then "_" else first)
+    + stringAsChars (c: if builtins.match "[A-z0-9_]" c == null then "_" else c) rest;
+
   testConfig = config;
 
   # MixOS machines are numbered after the NixOS machines, so that every machine
   # in the test has a unique node number, and thus unique MAC and IP addresses.
-  # See <nixos/lib/testing/network.nix>.
+  # See <nixpkgs/nixos/lib/testing/network.nix>.
   nodeNumbers = listToAttrs (
     zipListsWith nameValuePair (attrNames config.mixos.nodes) (
       range (length (attrNames config.allMachines) + 1) 254
@@ -91,7 +107,7 @@ let
       interfaces = attrValues config.virtualisation.allInterfaces;
       addressedInterfaces = filter (interface: interface.assignIP) interfaces;
 
-      # The addressing scheme <nixos/lib/testing/network.nix> gives the NixOS
+      # The addressing scheme <nixpkgs/nixos/lib/testing/network.nix> gives the NixOS
       # machines.
       ipv4Address = interface: "192.168.${toString interface.vlan}.${toString nodeNumber}";
       ipv6Address = interface: "2001:db8:${toString interface.vlan}::${toString nodeNumber}";
@@ -174,7 +190,7 @@ let
 
         # Interfaces are found by MAC address and renamed, since the names the
         # kernel hands out depend on probe order. This is the job the udev
-        # rules in <nixos/lib/testing/network.nix> do for the NixOS machines.
+        # rules in <nixpkgs/nixos/lib/testing/network.nix> do for the NixOS machines.
         init.network = mkIf (interfaces != [ ]) {
           action = "sysinit";
           tty = "console"; # so that failures to set up the network are visible
@@ -361,12 +377,6 @@ in
           MixOS configurations to be made available to the test environment.
         '';
       };
-
-      driverConfiguration = mkOption {
-        readOnly = true;
-        internal = true;
-        type = types.path;
-      };
     };
 
     driverConfiguration = mkOption {
@@ -381,27 +391,70 @@ in
         };
       };
     };
-
-    rawTestDerivationArg = mkOption {
-      type = types.functionTo types.raw;
-      # The name <nixos/lib/testing/run.nix> builds is prefixed with the kinds
-      # of machine the test driver starts itself, and the MixOS machines are
-      # not among those, so a test whose machines are all MixOS ones is left
-      # named "-test-run-<name>". Name it for what it is instead.
-      apply =
-        arg: finalAttrs:
-        let
-          inherit (config.driverConfiguration) containers vms;
-          kind = concatStringsSep "-and-" (
-            optional (containers != { }) "container" ++ optional (vms != { } || config.mixos.nodes != { }) "vm"
-          );
-        in
-        (arg finalAttrs) // { name = "${kind}-test-run-${config.name}"; };
-    };
   };
 
   config = {
-    extraPythonPackages = p: [ p.mixos ];
+    # Both kinds of machine are VM nodes of the same test driver, so they share
+    # one namespace of the names it exposes them to the test script under. Two
+    # machines whose names pythonize alike would shadow each other there, so
+    # compare the names the test script actually sees.
+    assertions =
+      let
+        takenNames = map pythonizeName (attrNames config.allMachines);
+        overlappingNames = filter (name: elem (pythonizeName name) takenNames) (
+          attrNames config.mixos.nodes
+        );
+      in
+      [
+        {
+          assertion = overlappingNames == [ ];
+          message = "The test driver exposes these MixOS machines under the same names as NixOS machines in the same test: ${concatStringsSep ", " overlappingNames}";
+        }
+      ];
+
+    # Hand the MixOS machines to the test driver along with the NixOS ones, so
+    # that it creates, tracks and tears them down like any other VM node, and
+    # so that a test with MixOS machines in it is never mistaken for a
+    # single-machine test.
+    driverConfiguration.vms = mapAttrs (name: startScript: {
+      inherit name;
+      start_script = startScript;
+    }) nodes;
+
+    # The driver hands the MixOS machines to the test script like any other VM
+    # node, but they don't run systemd, so take the systemd-only methods of the
+    # driver's machine class away from them before the test starts.
+    testScript = mkIf (config.mixos.nodes != { }) (mkBefore ''
+      class SystemdUnsupportedError(Exception):
+          """
+          Raised when a test calls a systemd-only method of the NixOS test driver's
+          machine class on a MixOS machine.
+          """
+
+      def _systemd_stub(machine_name: str, method: str):
+          def stub(*args, **kwargs):
+              raise SystemdUnsupportedError(
+                  f"{machine_name}.{method}() is a systemd-only method of the NixOS "
+                  "test driver, and MixOS machines do not run systemd"
+              )
+
+          stub.__name__ = method
+          return stub
+
+      for machine in [${concatMapStringsSep ", " pythonizeName (attrNames config.mixos.nodes)}]:
+          for method in (
+              "get_unit_info",
+              "get_unit_property",
+              "require_unit_state",
+              "start_job",
+              "stop_job",
+              "switch_root",
+              "systemctl",
+              "wait_for_unit",
+              "wait_for_x",
+          ):
+              setattr(machine, method, _systemd_stub(machine.name, method))
+    '');
 
     # Have the driver start a VDE switch for the virtual networks that only
     # MixOS machines are attached to.
@@ -410,9 +463,5 @@ in
     ) (attrValues mixosMachines);
 
     defaults.networking.extraHosts = mixosHosts;
-
-    mixos.driverConfiguration = (hostPkgs.formats.json { }).generate "mixos-driver-configuration.json" {
-      inherit nodes;
-    };
   };
 }

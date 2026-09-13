@@ -1,4 +1,4 @@
-{ config, ... }: {
+_: {
   name = "mixos-users-groups";
 
   mixos.nodes.machine = {
@@ -28,10 +28,6 @@
   };
 
   testScript = ''
-    import mixos
-
-    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
-
     assert "uid=0" in machine.succeed("su -l root -c id")
     assert "uid=1" in machine.succeed("su -l foo -c id")
     machine.fail("su -l bar -c id")

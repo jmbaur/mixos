@@ -1,4 +1,4 @@
-{ config, ... }: {
+_: {
   name = "mixos-kernel-modules";
 
   mixos.nodes.machine =
@@ -37,10 +37,6 @@
     };
 
   testScript = ''
-    import mixos
-
-    machine = mixos.create_machines("${config.mixos.driverConfiguration}", driver)["machine"]
-
     # kernel module options are set correctly
     assert "Y" == machine.succeed("cat /sys/module/nvme_tcp/parameters/wq_unbound").strip()
 
