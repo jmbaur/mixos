@@ -209,7 +209,7 @@ let
                 }) interfaces
               );
             in
-            "${getExe config.mixos.package} test-network ${networkConfig}";
+            "/bin/mixos test-network ${networkConfig}";
         };
 
         etc."hostname".source = mkDefault (pkgs.writeText "hostname" "${name}\n");
