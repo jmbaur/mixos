@@ -22,8 +22,9 @@ fn kmodLogUnwrapped(priority: c_int, content: [*c]const u8) callconv(.c) void {
     switch (priority) {
         C.LOG_EMERG, C.LOG_ALERT, C.LOG_CRIT, C.LOG_ERR => kmod_log.err("{s}", .{log_content}),
         C.LOG_WARNING => kmod_log.warn("{s}", .{log_content}),
-        C.LOG_NOTICE, C.LOG_INFO => kmod_log.info("{s}", .{log_content}),
-        else => kmod_log.debug("{s}", .{log_content}),
+        C.LOG_NOTICE => kmod_log.info("{s}", .{log_content}),
+        C.LOG_INFO, C.LOG_DEBUG => kmod_log.debug("{s}", .{log_content}),
+        else => {},
     }
 }
 
@@ -37,7 +38,7 @@ pub fn init(opts: struct { root: ?[]const u8 = null }) !Kmod {
     C.kmod_set_log_fn(kmod_ctx, C.kmod_log_wrapper, &kmodLogUnwrapped);
 
     // Set the maximum log level so we can do all the filtering on the zig side
-    C.kmod_set_log_priority(kmod_ctx, C.LOG_DEBUG);
+    C.kmod_set_log_priority(kmod_ctx, C.LOG_NOTICE);
 
     if (C.kmod_load_resources(kmod_ctx) != 0) {
         return error.KmodLoadResources;
@@ -155,8 +156,6 @@ pub fn modprobe(self: *Kmod, module_query: []const u8) !void {
         const module = C.kmod_module_get_module(current_module_list);
         defer _ = C.kmod_module_unref(module);
 
-        const name = std.mem.span(C.kmod_module_get_name(module));
-
         const module_state = C.kmod_module_get_initstate(module);
 
         switch (module_state) {
@@ -175,11 +174,9 @@ pub fn modprobe(self: *Kmod, module_query: []const u8) !void {
             .SUCCESS => {},
             .NOSYS => return error.ModulesNotAvailable,
             else => {
-                log.err("failed to load module {s}: {}", .{ name, err });
                 has_error = true;
             },
         } else {
-            log.err("unknown error loading module {s}", .{name});
             has_error = true;
         }
     }

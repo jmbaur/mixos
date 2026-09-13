@@ -353,15 +353,8 @@ fn loadDeviceModules(io: std.Io, allocator: std.mem.Allocator) !void {
             try seen.put(allocator, try allocator.dupe(u8, modalias), void{});
             found_new = true;
 
-            kmod.modprobe(modalias) catch |err| switch (err) {
-                // Plenty of devices have no module to go with them.
-                error.ModuleNotFound,
-                error.InvalidModuleAlias,
-                error.InvalidModuleLookup,
-                => {},
-                error.ModulesNotAvailable => return,
-                else => log.debug("failed to load module for '{s}': {}", .{ modalias, err }),
-            };
+            // Plenty of devices have no module to go with them, discard error.
+            kmod.modprobe(modalias) catch {};
         }
 
         if (!found_new) {
