@@ -9,6 +9,7 @@ pub const std_options: std.Options = .{
 const commands = struct {
     pub const init = @import("init.zig");
     pub const @"test-backdoor" = @import("test-backdoor.zig");
+    pub const @"test-network" = @import("test-network.zig");
     pub const modprobe = @import("modprobe.zig");
 };
 

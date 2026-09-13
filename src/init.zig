@@ -667,7 +667,7 @@ fn setupHostname(io: std.Io, allocator: std.mem.Allocator) !void {
 }
 
 fn setupNetworking() !void {
-    netlink.setInterfaceState("lo", .up) catch |err| switch (err) {
+    netlink.setInterfaceState(.{ .name = "lo" }, .up) catch |err| switch (err) {
         error.MnlSocketOpen => {},
         else => return err,
     };

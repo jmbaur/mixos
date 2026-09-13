@@ -7,21 +7,112 @@ mixosSystem:
 }:
 let
   inherit (lib)
+    attrNames
+    attrValues
+    concatMap
+    concatMapAttrsStringSep
+    concatMapStrings
     escapeShellArgs
+    filter
+    flatten
     getExe
+    head
     kernel
+    length
+    listToAttrs
     mapAttrs
+    mapAttrs'
+    mkDefault
+    mkIf
     mkOption
+    nameValuePair
+    optional
     optionalString
     optionals
+    range
+    remove
+    toLower
     types
+    unique
+    zipListsWith
     ;
+
+  # Reused for `qemuNicMac` and `qemuNICFlags`, so that the MixOS machines are
+  # attached and addressed exactly the way the NixOS machines are.
+  qemu-common = import "${hostPkgs.path}/nixos/lib/qemu-common.nix" {
+    inherit (hostPkgs) lib stdenv;
+  };
+
+  # Declares `virtualisation.vlans`, `virtualisation.interfaces` and
+  # `networking.primaryIP*Address`. It is written for guests that are not
+  # NixOS, which is exactly what the MixOS machines are.
+  guestNetworkingOptions = "${hostPkgs.path}/nixos/modules/virtualisation/guest-networking-options.nix";
 
   testConfig = config;
 
+  # MixOS machines are numbered after the NixOS machines, so that every machine
+  # in the test has a unique node number, and thus unique MAC and IP addresses.
+  # See <nixos/lib/testing/network.nix>.
+  nodeNumbers = listToAttrs (
+    zipListsWith nameValuePair (attrNames config.mixos.nodes) (
+      range (length (attrNames config.allMachines) + 1) 254
+    )
+  );
+
+  # The /etc/hosts entries for a set of machines, keyed by the name each is
+  # reachable under.
+  hostsEntries = concatMapAttrsStringSep "" (
+    hostName: machineConfig:
+    concatMapStrings (address: "${address} ${hostName}\n") (
+      remove "" [
+        machineConfig.networking.primaryIPAddress
+        machineConfig.networking.primaryIPv6Address
+      ]
+    )
+  );
+
+  nixosHosts = hostsEntries (
+    mapAttrs' (
+      _: nodeConfig: nameValuePair nodeConfig.networking.hostName nodeConfig
+    ) config.allMachines
+  );
+
+  # Handed to the NixOS machines via `defaults`, so that both kinds of machine
+  # can reach each other by name.
+  mixosHosts = hostsEntries (mapAttrs (_: machine: machine.config) mixosMachines);
+
   machineTestModule =
+    name:
     { config, pkgs, ... }:
+    let
+      inherit (config.virtualisation.test) nodeNumber;
+
+      interfaces = attrValues config.virtualisation.allInterfaces;
+      addressedInterfaces = filter (interface: interface.assignIP) interfaces;
+
+      # The addressing scheme <nixos/lib/testing/network.nix> gives the NixOS
+      # machines.
+      ipv4Address = interface: "192.168.${toString interface.vlan}.${toString nodeNumber}";
+      ipv6Address = interface: "2001:db8:${toString interface.vlan}::${toString nodeNumber}";
+    in
     {
+      imports = [ guestNetworkingOptions ];
+
+      options.virtualisation.test.nodeNumber = mkOption {
+        type = types.ints.between 1 254;
+        readOnly = true;
+        internal = true;
+        default =
+          nodeNumbers.${name}
+            or (throw "Can't have more than 254 machines in a test, including the MixOS ones!");
+        defaultText = "assigned by the test framework";
+        description = ''
+          The number identifying this machine among all of the machines in the
+          test, used to address it. Continues where the numbering of the NixOS
+          machines leaves off.
+        '';
+      };
+
       options.testing.qemu = {
         args = mkOption {
           type = types.listOf types.str;
@@ -56,12 +147,63 @@ let
       };
 
       config = {
+        # Unlike the NixOS machines, which are attached to vlan 1 by default, a
+        # MixOS machine only gets a network stack when the test asks for one.
+        virtualisation.vlans = mkDefault [ ];
+
+        networking = mkIf (addressedInterfaces != [ ]) {
+          primaryIPAddress = ipv4Address (head addressedInterfaces);
+          primaryIPv6Address = ipv6Address (head addressedInterfaces);
+        };
+
         boot.kernelModules = [
           "virtio_balloon"
           "virtio_console"
           "virtio_pci"
           "virtio_rng"
-        ];
+        ]
+        ++ optional (interfaces != [ ]) "virtio_net";
+
+        boot.requiredKernelConfig = mkIf (interfaces != [ ]) {
+          INET = kernel.yes;
+          IPV6 = kernel.yes;
+          NET = kernel.yes;
+          VIRTIO_NET = kernel.module;
+        };
+
+        # Interfaces are found by MAC address and renamed, since the names the
+        # kernel hands out depend on probe order. This is the job the udev
+        # rules in <nixos/lib/testing/network.nix> do for the NixOS machines.
+        init.network = mkIf (interfaces != [ ]) {
+          action = "sysinit";
+          tty = "console"; # so that failures to set up the network are visible
+          process =
+            let
+              networkConfig = (pkgs.formats.json { }).generate "mixos-test-network.json" (
+                map (interface: {
+                  inherit (interface) name;
+                  # QEMU lowercases MAC addresses, and so does sysfs, so the
+                  # machine can match against this verbatim.
+                  mac = toLower (qemu-common.qemuNicMac interface.vlan nodeNumber);
+                  addresses = optionals interface.assignIP [
+                    "${ipv4Address interface}/24"
+                    "${ipv6Address interface}/64"
+                  ];
+                }) interfaces
+              );
+            in
+            "${getExe config.mixos.package} test-network ${networkConfig}";
+        };
+
+        etc."hostname".source = mkDefault (pkgs.writeText "hostname" "${name}\n");
+
+        # Overrides the bare localhost-only default of the MixOS module.
+        etc."hosts" = mkIf (interfaces != [ ]) {
+          source = pkgs.writeText "etc-hosts" ''
+            127.0.0.1 localhost
+            ::1 localhost
+            ${nixosHosts}${mixosHosts}'';
+        };
 
         mixos.testing.enable = true;
 
@@ -140,13 +282,17 @@ let
       };
     };
 
-  nodes = mapAttrs (
+  mixosMachines = mapAttrs (
     name: module:
+    mixosSystem {
+      baseModules = [ (machineTestModule name) ];
+      modules = [ module ];
+    }
+  ) config.mixos.nodes;
+
+  nodes = mapAttrs (
+    name: mixosConfig:
     let
-      mixosConfig = mixosSystem {
-        baseModules = [ machineTestModule ];
-        modules = [ module ];
-      };
       inherit (mixosConfig.config.testing.qemu) diskImage;
       kernelCmdline = [
         "debug"
@@ -170,6 +316,16 @@ let
           "${toString kernelCmdline}"
         ]
       );
+      # Kept out of `escapeShellArgs` above, since the test driver hands the VDE
+      # switch sockets to the start script through the environment.
+      networkOpts = toString (
+        flatten (
+          zipListsWith (
+            interface: nic:
+            qemu-common.qemuNICFlags nic interface.vlan mixosConfig.config.virtualisation.test.nodeNumber
+          ) (attrValues mixosConfig.config.virtualisation.allInterfaces) (range 1 255)
+        )
+      );
     in
     getExe (
       hostPkgs.writeShellApplication {
@@ -186,32 +342,56 @@ let
             fi
           ''}
           exec qemu-kvm ${qemuOpts} \
+            ${networkOpts} \
             ${optionalString (diskImage != null) ''-drive "file=$MIXOS_DISK_IMAGE,if=virtio,format=qcow2"''} \
             "$@"
         '';
       }
     )
-  ) config.mixos.nodes;
+  ) mixosMachines;
 in
 {
-  options.mixos = {
-    nodes = mkOption {
-      type = types.attrsOf types.deferredModule;
-      default = { };
-      description = ''
-        MixOS configurations to be made available to the test environment.
-      '';
+  options = {
+    mixos = {
+      nodes = mkOption {
+        type = types.attrsOf types.deferredModule;
+        default = { };
+        description = ''
+          MixOS configurations to be made available to the test environment.
+        '';
+      };
+
+      driverConfiguration = mkOption {
+        readOnly = true;
+        internal = true;
+        type = types.path;
+      };
     };
 
     driverConfiguration = mkOption {
-      readOnly = true;
-      internal = true;
-      type = types.path;
+      type = types.submodule {
+        options.vlans = mkOption {
+          internal = true;
+          type = types.listOf types.ints.unsigned;
+          # The NixOS and the MixOS machines contribute their virtual networks
+          # separately, and the driver must not be asked to start two VDE
+          # switches for the same one.
+          apply = unique;
+        };
+      };
     };
   };
 
   config = {
     extraPythonPackages = p: [ p.mixos ];
+
+    # Have the driver start a VDE switch for the virtual networks that only
+    # MixOS machines are attached to.
+    driverConfiguration.vlans = concatMap (
+      machine: map (interface: interface.vlan) (attrValues machine.config.virtualisation.allInterfaces)
+    ) (attrValues mixosMachines);
+
+    defaults.networking.extraHosts = mixosHosts;
 
     mixos.driverConfiguration = (hostPkgs.formats.json { }).generate "mixos-driver-configuration.json" {
       inherit nodes;
