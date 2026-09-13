@@ -14,6 +14,10 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
+    // Emit a GNU build ID in every binary. Nixpkgs' `separateDebugInfo` hook
+    // keys the debug info it extracts on it, and only accepts a 20-byte one.
+    b.build_id = .sha1;
+
     const cpio_dep = b.dependency("cpio", .{});
 
     const libmnl_dep = b.dependency("libmnl", .{});
@@ -154,7 +158,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
-        .strip = optimize != .Debug,
+        .strip = false, // let stdenv strip hook do this for us, giving us debug info integration
         .link_libc = true,
     });
     mixos_module.linkLibrary(libmnl);

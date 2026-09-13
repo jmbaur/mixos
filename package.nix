@@ -1,5 +1,6 @@
 {
   lib,
+  bintools,
   nukeReferences,
   stdenvNoCC,
   zig_0_16,
@@ -23,19 +24,20 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   __structuredAttrs = true;
   doCheck = true;
   strictDeps = true;
-
+  separateDebugInfo = true;
   nativeBuildInputs = [
+    bintools # needed for strip hook
     nukeReferences
     zig_0_16
   ];
 
-  # Prevent zig (or anything else) from being in the runtime closure
+  # Prevent zig (or anything else) from being in the runtime closure (debug output is excluded).
   allowedReferences = [ ];
 
   dontSetZigDefaultFlags = true;
 
   zigBuildFlags = [
-    "-Doptimize=ReleaseSmall"
+    "-Doptimize=ReleaseSafe"
     "-Dcpu=baseline"
     "-Dbuildtools=${lib.boolToString buildTools}"
     "-Dtarget=${
