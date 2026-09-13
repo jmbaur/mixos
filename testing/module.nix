@@ -12,6 +12,7 @@ let
     concatMap
     concatMapAttrsStringSep
     concatMapStrings
+    concatStringsSep
     escapeShellArgs
     filter
     flatten
@@ -379,6 +380,23 @@ in
           apply = unique;
         };
       };
+    };
+
+    rawTestDerivationArg = mkOption {
+      type = types.functionTo types.raw;
+      # The name <nixos/lib/testing/run.nix> builds is prefixed with the kinds
+      # of machine the test driver starts itself, and the MixOS machines are
+      # not among those, so a test whose machines are all MixOS ones is left
+      # named "-test-run-<name>". Name it for what it is instead.
+      apply =
+        arg: finalAttrs:
+        let
+          inherit (config.driverConfiguration) containers vms;
+          kind = concatStringsSep "-and-" (
+            optional (containers != { }) "container" ++ optional (vms != { } || config.mixos.nodes != { }) "vm"
+          );
+        in
+        (arg finalAttrs) // { name = "${kind}-test-run-${config.name}"; };
     };
   };
 
