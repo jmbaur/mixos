@@ -4,11 +4,10 @@
   nukeReferences,
   stdenvNoCC,
   zig_0_16,
-  buildTools ? false,
 }:
 
 stdenvNoCC.mkDerivation (finalAttrs: {
-  pname = lib.concatStringsSep "-" ([ "mixos" ] ++ lib.optional buildTools "buildtools");
+  pname = "mixos";
   version = "1.11.0";
 
   src = lib.fileset.toSource {
@@ -20,6 +19,11 @@ stdenvNoCC.mkDerivation (finalAttrs: {
       ./src
     ];
   };
+
+  outputs = [
+    "out"
+    "buildtools"
+  ];
 
   __structuredAttrs = true;
   doCheck = true;
@@ -39,7 +43,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   zigBuildFlags = [
     "-Doptimize=ReleaseSafe"
     "-Dcpu=baseline"
-    "-Dbuildtools=${lib.boolToString buildTools}"
     "-Dtarget=${
       {
         "armv7l-linux" = "arm-linux";
@@ -54,8 +57,15 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     ln -s ${finalAttrs.passthru.deps} "$ZIG_GLOBAL_CACHE_DIR/p"
   '';
 
+  postInstall = ''
+    mkdir -p $buildtools/bin
+    mv $out/buildtools/* $buildtools/bin/
+    rmdir $out/buildtools
+  '';
+
   postFixup = ''
     nuke-refs -e $out $out/bin/*
+    nuke-refs -e $buildtools $buildtools/bin/*
   '';
 
   passthru.deps = zig_0_16.fetchDeps {

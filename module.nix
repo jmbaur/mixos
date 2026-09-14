@@ -815,7 +815,6 @@ in
       system.build.initrd = checkAssertWarn config.assertions config.warnings (
         pkgs.callPackage (
           {
-            buildPackages,
             cpio,
             erofs-utils,
             jq,
@@ -850,7 +849,7 @@ in
             };
 
             nativeBuildInputs = [
-              (buildPackages.callPackage ./package.nix { buildTools = true; })
+              config.mixos.package.buildtools # only works because buildtools is always built for buildPlatform
               cpio
               erofs-utils
               jq

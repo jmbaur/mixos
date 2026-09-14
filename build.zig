@@ -1,43 +1,13 @@
 const std = @import("std");
 const varlink = @import("varlink");
 
-pub fn build(b: *std.Build) void {
-    const buildtools = b.option(bool, "buildtools", "Install build tools") orelse false;
+const buildtools_dir: std.Build.InstallDir = .{ .custom = "buildtools" };
 
-    const target = b.standardTargetOptions(.{
-        .default_target = .{
-            .abi = .musl,
-            .cpu_model = .baseline,
-            .os_tag = .linux,
-        },
-    });
-
-    const optimize = b.standardOptimizeOption(.{});
-
-    // Emit a GNU build ID in every binary. Nixpkgs' `separateDebugInfo` hook
-    // keys the debug info it extracts on it, and only accepts a 20-byte one.
-    b.build_id = .sha1;
-
-    const cpio_dep = b.dependency("cpio", .{});
-
-    const libmnl_dep = b.dependency("libmnl", .{});
-    const libmnl = b.addLibrary(.{
-        .name = "mnl",
-        .root_module = b.createModule(.{
-            .root_source_file = null,
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-        }),
-    });
-    libmnl.root_module.addCSourceFiles(.{
-        .root = libmnl_dep.path(""),
-        .files = &.{ "src/socket.c", "src/callback.c", "src/nlmsg.c", "src/attr.c" },
-    });
-    libmnl.root_module.addConfigHeader(b.addConfigHeader(.{}, .{}));
-    libmnl.root_module.addIncludePath(libmnl_dep.path("include"));
-    libmnl.installHeadersDirectory(libmnl_dep.path("include"), "", .{});
-
+fn addLibkmod(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+) *std.Build.Step.Compile {
     const kmod_dep = b.dependency("kmod", .{});
 
     var kmod_cflags: std.ArrayList([]const u8) = .empty;
@@ -128,29 +98,81 @@ pub fn build(b: *std.Build) void {
     libkmod.root_module.addIncludePath(kmod_dep.path("libkmod"));
     libkmod.installHeader(kmod_dep.path("libkmod/libkmod.h"), "libkmod/libkmod.h");
 
-    if (buildtools) {
-        const kconfig = b.addExecutable(.{
-            .name = "kconfig",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/kconfig.zig"),
-                .target = target,
-                .optimize = optimize,
-            }),
-        });
-        b.installArtifact(kconfig);
+    return libkmod;
+}
 
-        const copy_modules_closure = b.addExecutable(.{
-            .name = "copy-modules-closure",
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/copy-modules-closure.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc = true,
-            }),
-        });
-        copy_modules_closure.root_module.linkLibrary(libkmod);
-        b.installArtifact(copy_modules_closure);
-    }
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{
+        .default_target = .{
+            .abi = .musl,
+            .cpu_model = .baseline,
+            .os_tag = .linux,
+        },
+    });
+
+    // Build tools are only ever run as part of building a system, so they are
+    // always built for the build platform. They are statically linked against
+    // musl so that they don't pick up a dependency on the build platform's
+    // libc.
+    const buildtools_target = b.resolveTargetQuery(.{
+        .abi = .musl,
+        .cpu_arch = b.graph.host.result.cpu.arch,
+        .cpu_model = .baseline,
+        .os_tag = b.graph.host.result.os.tag,
+    });
+
+    const optimize = b.standardOptimizeOption(.{});
+
+    // used by nixpkgs' separateDebugInfo
+    b.build_id = .sha1;
+
+    const cpio_dep = b.dependency("cpio", .{});
+
+    const libmnl_dep = b.dependency("libmnl", .{});
+    const libmnl = b.addLibrary(.{
+        .name = "mnl",
+        .root_module = b.createModule(.{
+            .root_source_file = null,
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    libmnl.root_module.addCSourceFiles(.{
+        .root = libmnl_dep.path(""),
+        .files = &.{ "src/socket.c", "src/callback.c", "src/nlmsg.c", "src/attr.c" },
+    });
+    libmnl.root_module.addConfigHeader(b.addConfigHeader(.{}, .{}));
+    libmnl.root_module.addIncludePath(libmnl_dep.path("include"));
+    libmnl.installHeadersDirectory(libmnl_dep.path("include"), "", .{});
+
+    const libkmod = addLibkmod(b, target, optimize);
+
+    const kconfig = b.addExecutable(.{
+        .name = "kconfig",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/kconfig.zig"),
+            .target = buildtools_target,
+            .optimize = optimize,
+        }),
+    });
+    b.getInstallStep().dependOn(&b.addInstallArtifact(kconfig, .{
+        .dest_dir = .{ .override = buildtools_dir },
+    }).step);
+
+    const copy_modules_closure = b.addExecutable(.{
+        .name = "copy-modules-closure",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/copy-modules-closure.zig"),
+            .target = buildtools_target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
+    });
+    copy_modules_closure.root_module.linkLibrary(addLibkmod(b, buildtools_target, optimize));
+    b.getInstallStep().dependOn(&b.addInstallArtifact(copy_modules_closure, .{
+        .dest_dir = .{ .override = buildtools_dir },
+    }).step);
 
     const varlink_dep = b.dependency("varlink", .{});
 
