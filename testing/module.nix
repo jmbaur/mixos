@@ -96,11 +96,15 @@ let
 
   # Handed to the NixOS machines via `defaults`, so that both kinds of machine
   # can reach each other by name.
-  mixosHosts = hostsEntries (mapAttrs (_: machine: machine.config) mixosMachines);
+  mixosHosts = hostsEntries config.mixos.nodes;
 
   machineTestModule =
-    name:
-    { config, pkgs, ... }:
+    {
+      name,
+      config,
+      pkgs,
+      ...
+    }:
     let
       inherit (config.virtualisation.test) nodeNumber;
 
@@ -299,24 +303,22 @@ let
       };
     };
 
-  mixosMachines = mapAttrs (
-    name: module:
-    mixosSystem {
-      baseModules = [ (machineTestModule name) ];
-      modules = [ module ];
-    }
-  ) config.mixos.nodes;
+  mixosNodeType =
+    (mixosSystem {
+      baseModules = [ machineTestModule ];
+      modules = [ ];
+    }).type;
 
-  nodes = mapAttrs (
+  startScripts = mapAttrs (
     name: mixosConfig:
     let
-      inherit (mixosConfig.config.testing.qemu) diskImage;
+      inherit (mixosConfig.testing.qemu) diskImage;
       kernelCmdline = [
         "debug"
       ]
-      ++ optionals mixosConfig._module.args.pkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ];
+      ++ optionals mixosConfig.nixpkgs.pkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ];
       qemuOpts = escapeShellArgs (
-        mixosConfig.config.testing.qemu.args
+        mixosConfig.testing.qemu.args
         ++ [
           # TODO(jared): The NixOS VM test framework does some extra
           # steps to make vsock work without /dev/vhost-vsock
@@ -326,9 +328,9 @@ let
           # "-device"
           # "vhost-vsock-pci,guest-cid=${toString (3 + length (attrNames config.nodes))}"
           "-kernel"
-          "${mixosConfig.config.system.build.toplevel}/kernel"
+          "${mixosConfig.system.build.toplevel}/kernel"
           "-initrd"
-          "${mixosConfig.config.system.build.toplevel}/initrd"
+          "${mixosConfig.system.build.toplevel}/initrd"
           "-append"
           "${toString kernelCmdline}"
         ]
@@ -339,8 +341,8 @@ let
         flatten (
           zipListsWith (
             interface: nic:
-            qemu-common.qemuNICFlags nic interface.vlan mixosConfig.config.virtualisation.test.nodeNumber
-          ) (attrValues mixosConfig.config.virtualisation.allInterfaces) (range 1 255)
+            qemu-common.qemuNICFlags nic interface.vlan mixosConfig.virtualisation.test.nodeNumber
+          ) (attrValues mixosConfig.virtualisation.allInterfaces) (range 1 255)
         )
       );
     in
@@ -365,14 +367,15 @@ let
         '';
       }
     )
-  ) mixosMachines;
+  ) config.mixos.nodes;
 in
 {
   options = {
     mixos = {
       nodes = mkOption {
-        type = types.attrsOf types.deferredModule;
+        type = types.lazyAttrsOf mixosNodeType;
         default = { };
+        visible = "shallow";
         description = ''
           MixOS configurations to be made available to the test environment.
         '';
@@ -419,7 +422,7 @@ in
     driverConfiguration.vms = mapAttrs (name: startScript: {
       inherit name;
       start_script = startScript;
-    }) nodes;
+    }) startScripts;
 
     # The driver hands the MixOS machines to the test script like any other VM
     # node, but they don't run systemd, so take the systemd-only methods of the
@@ -459,8 +462,8 @@ in
     # Have the driver start a VDE switch for the virtual networks that only
     # MixOS machines are attached to.
     driverConfiguration.vlans = concatMap (
-      machine: map (interface: interface.vlan) (attrValues machine.config.virtualisation.allInterfaces)
-    ) (attrValues mixosMachines);
+      machine: map (interface: interface.vlan) (attrValues machine.virtualisation.allInterfaces)
+    ) (attrValues config.mixos.nodes);
 
     defaults.networking.extraHosts = mixosHosts;
   };
