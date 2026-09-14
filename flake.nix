@@ -147,7 +147,7 @@
 
           runnerMixos = inputs.self.lib.mixosSystem {
             modules = [
-              ({ ... }: {
+              (_: {
                 nixpkgs = { inherit pkgs; };
 
                 init.shell = {
