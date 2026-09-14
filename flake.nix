@@ -2,7 +2,7 @@
   description = "MixOS, a Minimal Nix OS";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable-small";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     pyproject-nix.url = "github:pyproject-nix/pyproject.nix";
     pyproject-nix.inputs.nixpkgs.follows = "nixpkgs";
     flake-compat = {
@@ -147,7 +147,7 @@
 
           runnerMixos = inputs.self.lib.mixosSystem {
             modules = [
-              ({ lib, ... }: {
+              ({ ... }: {
                 nixpkgs = { inherit pkgs; };
 
                 init.shell = {
