@@ -2,7 +2,7 @@
   description = "MixOS, a Minimal Nix OS";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable-small";
     pyproject-nix.url = "github:pyproject-nix/pyproject.nix";
     pyproject-nix.inputs.nixpkgs.follows = "nixpkgs";
     flake-compat = {
@@ -161,15 +161,6 @@
                       "/dev/console";
                   process = "/bin/sh";
                 };
-
-                # TODO(jared): Remove this once we have https://github.com/NixOS/nixpkgs/pull/546157
-                boot.kernelPatches = [
-                  {
-                    name = "module-decompress";
-                    patch = null;
-                    structuredExtraConfig.MODULE_DECOMPRESS = lib.kernel.yes;
-                  }
-                ];
               })
             ];
           };

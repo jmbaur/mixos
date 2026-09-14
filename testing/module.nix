@@ -218,7 +218,6 @@ let
 
         etc."hostname".source = mkDefault (pkgs.writeText "hostname" "${name}\n");
 
-        # Overrides the bare localhost-only default of the MixOS module.
         etc."hosts" = mkIf (interfaces != [ ]) {
           source = pkgs.writeText "etc-hosts" ''
             127.0.0.1 localhost
@@ -230,15 +229,6 @@ let
 
         # Reuse the same package set used by NixOS VM nodes.
         nixpkgs.pkgs = testConfig.node.pkgs;
-
-        # TODO(jared): Remove this once we have https://github.com/NixOS/nixpkgs/pull/546157
-        boot.kernelPatches = [
-          {
-            name = "module-decompress";
-            patch = null;
-            structuredExtraConfig.MODULE_DECOMPRESS = kernel.yes;
-          }
-        ];
 
         testing.qemu.args = [
           "-nographic"
