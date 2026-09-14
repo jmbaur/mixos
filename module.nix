@@ -19,6 +19,7 @@ let
     const
     elem
     escapeShellArgs
+    filter
     filterAttrs
     flatten
     flip
@@ -69,6 +70,31 @@ let
     "ctrlaltdel"
   ];
 
+  enabledInit = filterAttrs (const (getAttr "enable")) config.init;
+
+  danglingDepAssertions = flatten (
+    mapAttrsToList (
+      name:
+      { action, deps, ... }:
+      map (
+        dep:
+        let
+          reason =
+            if !(hasAttr dep config.init) then
+              "no such init entry is declared"
+            else if !(hasAttr dep enabledInit) then
+              "that init entry is disabled"
+            else
+              "that init entry has action '${enabledInit.${dep}.action}', and deps only order entries sharing the same action";
+        in
+        {
+          assertion = false;
+          message = "init entry '${name}' (action '${action}') depends on '${dep}', which cannot be resolved: ${reason}";
+        }
+      ) (filter (dep: !(hasAttr dep enabledInit && enabledInit.${dep}.action == action)) deps)
+    ) enabledInit
+  );
+
   # <id>:<runlevels>:<action>:<process>
   inittab =
     let
@@ -100,7 +126,7 @@ let
                     text = "${tty}::${action}:${process}"; # busybox /init does not implement runlevels
                   };
                 }
-              ) (filterAttrs (const (getAttr "enable")) config.init)
+              ) enabledInit
             )
           );
     in
@@ -315,78 +341,69 @@ in
     init = mkOption {
       default = { };
       type = types.attrsOf (
-        types.submodule (
-          { config, ... }:
-          {
-            options = {
-              enable = mkOption {
-                type = types.bool;
-                default = true;
-                description = ''
-                  Whether to enable this process.
-                '';
-              };
-
-              tty = mkOption {
-                type = types.str;
-                default = "null";
-                example = "tty1";
-                description = ''
-                  This field is used by BusyBox init to specify the controlling
-                  tty for the specified process to run on.  The contents of this
-                  field are appended to "/dev/" and used as-is.  There is no need
-                  for this field to be unique, although if it isn't you may have
-                  strange results.  If this field is left blank, then the init's
-                  stdin/out will be used.
-                '';
-              };
-
-              action = mkOption {
-                type = types.enum possibleActions;
-                description = ''
-                  sysinit actions are started first, and init waits for them to
-                  complete. wait actions are started next, and init waits for
-                  them to complete. once actions are started next (and not waited
-                  for).
-
-                  askfirst and respawn are started next. For askfirst, before
-                  running the specified process, init displays the line "Please
-                  press Enter to activate this console" and then waits for the
-                  user to press enter before starting it.
-
-                  shutdown actions are run on halt/reboot/poweroff, or on
-                  SIGQUIT. Then the machine is halted/rebooted/powered off, or
-                  for SIGQUIT, restart action is exec'ed (init process is
-                  replaced by that process). If no restart action specified,
-                  SIGQUIT has no effect.
-
-                  ctrlaltdel actions are run when SIGINT is received (this might
-                  be initiated by Ctrl-Alt-Del key combination). After they
-                  complete, normal processing of askfirst / respawn resumes.
-                '';
-              };
-
-              process = mkOption {
-                type = types.either types.str types.package;
-                example = "/bin/echo 'hello, world'";
-                description = ''
-                  Specifies the process to be executed and it's command line.
-                '';
-              };
-
-              deps = mkOption {
-                type = types.listOf types.str;
-                default = [ ];
-              };
+        types.submodule (_: {
+          options = {
+            enable = mkOption {
+              type = types.bool;
+              default = true;
+              description = ''
+                Whether to enable this process.
+              '';
             };
 
-            # Used to ensure syslogd starts before anything else that uses the
-            # "respawn" action.
-            config = mkIf (config.action == "respawn") {
-              deps = [ "syslogd" ];
+            tty = mkOption {
+              type = types.str;
+              default = "null";
+              example = "tty1";
+              description = ''
+                This field is used by BusyBox init to specify the controlling
+                tty for the specified process to run on.  The contents of this
+                field are appended to "/dev/" and used as-is.  There is no need
+                for this field to be unique, although if it isn't you may have
+                strange results.  If this field is left blank, then the init's
+                stdin/out will be used.
+              '';
             };
-          }
-        )
+
+            action = mkOption {
+              type = types.enum possibleActions;
+              description = ''
+                sysinit actions are started first, and init waits for them to
+                complete. wait actions are started next, and init waits for
+                them to complete. once actions are started next (and not waited
+                for).
+
+                askfirst and respawn are started next. For askfirst, before
+                running the specified process, init displays the line "Please
+                press Enter to activate this console" and then waits for the
+                user to press enter before starting it.
+
+                shutdown actions are run on halt/reboot/poweroff, or on
+                SIGQUIT. Then the machine is halted/rebooted/powered off, or
+                for SIGQUIT, restart action is exec'ed (init process is
+                replaced by that process). If no restart action specified,
+                SIGQUIT has no effect.
+
+                ctrlaltdel actions are run when SIGINT is received (this might
+                be initiated by Ctrl-Alt-Del key combination). After they
+                complete, normal processing of askfirst / respawn resumes.
+              '';
+            };
+
+            process = mkOption {
+              type = types.either types.str types.package;
+              example = "/bin/echo 'hello, world'";
+              description = ''
+                Specifies the process to be executed and it's command line.
+              '';
+            };
+
+            deps = mkOption {
+              type = types.listOf types.str;
+              default = [ ];
+            };
+          };
+        })
       );
     };
 
@@ -515,7 +532,7 @@ in
     {
       _module.args.pkgs = config.nixpkgs.pkgs;
 
-      assertions = [
+      assertions = danglingDepAssertions ++ [
         {
           # For leveraging nullfs, to simplify initrd logic.
           assertion = versionAtLeast config.boot.kernelPackages.kernel.version "7.0";
@@ -629,24 +646,26 @@ in
           process = mkDefault "/bin/swapoff -a";
         };
 
-        syslogd = {
-          action = "respawn";
-          process = mkDefault "/bin/syslogd -n -D";
-        };
-
         runsvdir = {
           action = "respawn";
           process = mkDefault "/bin/runsvdir -P /var/service";
         };
       };
 
-      # Consider writing our own watchdog daemon, since this does not handle
-      # the case where the watchdog character device does not exist, so runsv
-      # constantly restarts the process.
       services.watchdog = mkIf config.boot.watchdog.enable {
         run = mkDefault (
           pkgs.writeScript "watchdog-run" ''
             #!/bin/sh
+
+            while [ ! -c /dev/watchdog ]; do
+              if [ -z "$warned" ] && [ -S /dev/log ]; then
+                logger -t watchdog "no /dev/watchdog, waiting for the device to appear"
+                warned=1
+              fi
+
+              sleep 1
+            done
+
             exec /bin/watchdog -F /dev/watchdog
           ''
         );
@@ -659,9 +678,23 @@ in
         ''
       );
 
+      services.syslogd.run = mkDefault (
+        pkgs.writeScript "syslogd-run" ''
+          #!/bin/sh
+          exec /bin/syslogd -n -D
+        ''
+      );
+
       services.klogd.run = mkDefault (
         pkgs.writeScript "klogd-run" ''
           #!/bin/sh
+
+          # Since runsvdir gives us no ordering, we wait for syslogd's socket
+          # (/dev/log) so we can get early kernel logs into syslogd.
+          while [ ! -S /dev/log ]; do
+            sleep 0.1
+          done
+
           exec /bin/klogd -n
         ''
       );
