@@ -1,6 +1,7 @@
 {
-  lib,
   bintools,
+  buildPackages,
+  lib,
   nukeReferences,
   stdenvNoCC,
   zig_0_16,
@@ -68,7 +69,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     nuke-refs -e $buildtools $buildtools/bin/*
   '';
 
-  passthru.deps = zig_0_16.fetchDeps {
+  passthru.deps = buildPackages.zig_0_16.fetchDeps {
     pname = "mixos";
     inherit (finalAttrs) src version;
     hash = "sha256-AibAg0fTfKpT4RHMLliocerMt932J+vJpKrIYtWsS4Q=";
