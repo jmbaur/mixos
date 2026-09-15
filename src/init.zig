@@ -187,6 +187,16 @@ fn mountPseudoFilesystems(io: std.Io) void {
 
     b: {
         linux.mount(
+            "pstore",
+            "/sys/fs/pstore",
+            "pstore",
+            system.MS.NOEXEC | system.MS.NOSUID | system.MS.NODEV,
+            0,
+        ) catch break :b;
+    }
+
+    b: {
+        linux.mount(
             "configfs",
             "/sys/kernel/config",
             "configfs",
