@@ -434,7 +434,7 @@ in
           stub.__name__ = method
           return stub
 
-      for machine in [${concatMapStringsSep ", " pythonizeName (attrNames config.mixos.nodes)}]:
+      for mixos_machine in [${concatMapStringsSep ", " pythonizeName (attrNames config.mixos.nodes)}]:
           for method in (
               "get_unit_info",
               "get_unit_property",
@@ -446,7 +446,7 @@ in
               "wait_for_unit",
               "wait_for_x",
           ):
-              setattr(machine, method, _systemd_stub(machine.name, method))
+              setattr(mixos_machine, method, _systemd_stub(mixos_machine.name, method))
     '');
 
     # Have the driver start a VDE switch for the virtual networks that only
