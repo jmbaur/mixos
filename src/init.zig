@@ -41,7 +41,7 @@ const StateConfig = struct {
     options: []const []const u8,
 };
 
-const Manifest = struct {
+pub const Manifest = struct {
     /// The PID1 of the post-initrd system.
     init: []const u8,
 
@@ -112,6 +112,16 @@ fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd: posix
     return loop_device_path;
 }
 
+/// Where the nix store for a system comes from.
+pub const StoreSource = union(enum) {
+    /// A block device holding an erofs image, which is what the initrd carries.
+    erofs: []const u8,
+
+    /// An already-mounted tree, opened before a pivot so that it survives one.
+    /// This is how a store that lives on another machine arrives.
+    tree: *Mount,
+};
+
 fn mountStore(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -132,14 +142,26 @@ fn mountStore(
     );
 }
 
+/// The one place a root-to-be lives, whether it is the one the initrd unpacks
+/// into or one staged on a disk for a running system to hand over to.
+///
+/// Not anyone's to choose, because `mixos shutdown` has to know it: that runs
+/// before init exec's a restart action, and leaves this standing when it takes
+/// the rest down, so it is the only place a system staged for a handover is
+/// still there once the handover gets to run.
+pub const sysroot = "/sysroot";
+
+/// The same, for paths resolved against a handle on the root rather than from it.
+const sysroot_relative = sysroot[1..];
+
 /// Returns a handle to the new root directory.
-fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
-    try root_dir.createDirPath(io, "sysroot");
+pub fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
+    try root_dir.createDirPath(io, sysroot_relative);
 
     var tmpfs = try Mount.init("tmpfs");
-    try tmpfs.finish(root_dir, "sysroot", Mount.Options.NODEV | Mount.Options.NOSUID);
+    try tmpfs.finish(root_dir, sysroot_relative, Mount.Options.NODEV | Mount.Options.NOSUID);
 
-    var sysroot_dir = try root_dir.openDir(io, "sysroot", .{});
+    var sysroot_dir = try root_dir.openDir(io, sysroot_relative, .{});
     defer sysroot_dir.close(io);
 
     // Create directories that do not yet exist
@@ -157,19 +179,30 @@ fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     try linux.umount(".", system.MNT.DETACH);
 }
 
-fn setupRoot(
+pub fn setupRoot(
     io: std.Io,
     allocator: std.mem.Allocator,
     root_dir: std.Io.Dir,
     manifest: *const Manifest,
-    store_blockdev: []const u8,
+    store: StoreSource,
 ) !void {
     // Create directories that do not yet exist
     inline for (&.{ "usr", "etc", "run", "tmp", "var", "root", "home" }) |path| {
         try root_dir.createDirPath(io, path);
     }
 
-    try mountStore(io, allocator, store_blockdev, std.Io.Dir.cwd(), manifest.storeDir);
+    switch (store) {
+        .erofs => |blockdev| try mountStore(io, allocator, blockdev, std.Io.Dir.cwd(), manifest.storeDir),
+        .tree => |tree| {
+            const store_dir_relative = std.mem.trimStart(u8, manifest.storeDir, std.fs.path.sep_str);
+            try std.Io.Dir.cwd().createDirPath(io, store_dir_relative);
+            try tree.finish(
+                std.Io.Dir.cwd(),
+                try allocator.dupeZ(u8, store_dir_relative),
+                Mount.Options.RDONLY | Mount.Options.NODEV | Mount.Options.NOSUID,
+            );
+        },
+    }
 
     var usr = try Mount.initTree(std.Io.Dir.cwd(), manifest.usr);
     try usr.finish(root_dir, "usr", 0);
@@ -792,13 +825,16 @@ fn setupSystem(
     // We create this memfd object as early as possible, mostly so we get the
     // vanity of having a low file descriptor number.
     //
-    // NOTE: We don't close the store_fd, since that would deallocate the memfd
-    const store_fd = try linux.memfdCreate("store", system.MFD.ALLOW_SEALING);
+    // CLOEXEC because this descriptor is ours and no one else's: PID1 exec's
+    // the real init at the end of all this, and anything holding the store open
+    // across that would keep the whole image in memory and show up in every
+    // /proc/<pid>/fd in the system.
+    const store_fd = try linux.memfdCreate("store", system.MFD.ALLOW_SEALING | system.MFD.CLOEXEC);
 
     const allocator = init.arena.allocator();
 
     var manifest: Manifest = undefined;
-    var store_blockdev: []const u8 = undefined;
+    var store: StoreSource = undefined;
 
     // pre switch-root
     {
@@ -838,17 +874,38 @@ fn setupSystem(
             };
         }
 
-        store_blockdev = try createStoreLoopback(init.io, allocator, store_fd, manifest.storeFS);
+        store = .{ .erofs = try createStoreLoopback(init.io, allocator, store_fd, manifest.storeFS) };
+
+        // The loopback device took its own reference to the memfd, so ours has
+        // done its job. Letting it go now means the image is held by exactly
+        // one thing, which is what makes it possible to ever give it back.
+        _ = system.close(store_fd);
 
         try switchRoot(init.io, root_dir);
     }
 
+    defer kmsg.deinit(init.io);
+
+    return try bringUp(init, allocator, stage2_init_allocator, &manifest, store);
+}
+
+/// Bring up the system described by `manifest` inside the root we have just
+/// pivoted into, and return the init to hand control to.
+///
+/// Everything here is equally true of the system the initrd unpacks and of one
+/// switched into later from somewhere else, so both paths share it: the only
+/// thing that differs between them is where the store came from.
+pub fn bringUp(
+    init: std.process.Init,
+    allocator: std.mem.Allocator,
+    stage2_init_allocator: std.mem.Allocator,
+    manifest: *const Manifest,
+    store: StoreSource,
+) ![:0]const u8 {
     var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
     defer root_dir.close(init.io);
 
-    defer kmsg.deinit(init.io);
-
-    try setupRoot(init.io, allocator, root_dir, &manifest, store_blockdev);
+    try setupRoot(init.io, allocator, root_dir, manifest, store);
 
     mountPseudoFilesystems(init.io);
 

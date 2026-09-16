@@ -815,14 +815,9 @@ in
           process = mkDefault "/bin/reboot";
         };
 
-        umount = {
+        shutdown = {
           action = "shutdown";
-          process = mkDefault "/bin/umount -a -r";
-        };
-
-        swapoff = {
-          action = "shutdown";
-          process = mkDefault "/bin/swapoff -a";
+          process = mkDefault "/bin/mixos shutdown";
         };
 
         runsvdir = {

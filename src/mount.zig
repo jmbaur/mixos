@@ -13,6 +13,12 @@ const log = std.log.scoped(.mixos);
 /// Close the file on execve()
 const OPEN_TREE_CLOEXEC = C.O_CLOEXEC;
 
+/// Operate on the mount `dirfd` itself rather than on a path below it.
+const AT_EMPTY_PATH = C.AT_EMPTY_PATH;
+
+/// Reach the submounts a cloned tree brought with it, not just its top.
+const AT_RECURSIVE = 0x8000;
+
 const Mount = @This();
 
 const FD = enum { fs, mnt };
@@ -110,7 +116,18 @@ pub fn finish(self: *Mount, dest_dir: std.Io.Dir, dest: [*:0]const u8, attrs: us
             _ = system.close(fsfd);
             break :b mntfd;
         },
-        .mnt => |mntfd| mntfd,
+        // A cloned tree has no fsmount() to hand the attributes to, so they
+        // have to be set on the mount itself. Recursively, since whatever the
+        // clone brought along is equally part of what the caller asked to be
+        // mounted this way.
+        .mnt => |mntfd| b: {
+            const requested = self.attrs | attrs;
+            if (requested != 0) {
+                const mount_attr: linux.MountAttr = .{ .attr_set = requested };
+                try linux.mountSetattr(mntfd, "", AT_EMPTY_PATH | AT_RECURSIVE, &mount_attr);
+            }
+            break :b mntfd;
+        },
     };
     defer _ = system.close(mntfd);
 

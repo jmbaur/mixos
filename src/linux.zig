@@ -19,6 +19,9 @@ pub fn setHostname(hostname: []const u8) !void {
 }
 
 pub const Error = error{
+    AlreadyMounted,
+    DeviceBusy,
+    DeviceNotBound,
     FileNotFound,
     FilesystemFdUsed,
     InvalidArguments,
@@ -139,10 +142,157 @@ pub fn mount(
         .SUCCESS => {},
         .NOENT => return Error.UnsupportedFilesystem,
         .NOMEM => return Error.OutOfMemory,
+        // Single-superblock filesystems -- pstore, debugfs, tracefs and
+        // securityfs among them -- report this rather than stacking a second
+        // mount. Something already being where we want it is not a failure, and
+        // is the normal case for a root we pivoted into carrying /sys with it.
+        .BUSY => return Error.AlreadyMounted,
         else => |err| {
             log.err("failed to mount \"{s}\" on \"{s}\": {s}", .{ special, dir, @tagName(err) });
             return std.posix.unexpectedErrno(err);
         },
+    }
+}
+
+/// `struct mnt_id_req`. The kernel tells versions of this apart by the size the
+/// caller reports, so `size` has to match the fields actually filled in.
+pub const MountIdReq = extern struct {
+    size: u32 = @sizeOf(MountIdReq),
+    spare: u32 = 0,
+    mnt_id: u64,
+    param: u64 = 0,
+    mnt_ns_id: u64 = 0,
+
+    /// Passed as `mnt_id` to list the mounts of the current namespace from its
+    /// root, rather than the children of some particular mount.
+    pub const LSMT_ROOT: u64 = 0xffffffffffffffff;
+};
+
+/// What `statmount` should fill in. It writes only what is asked for, and says
+/// in `Statmount.mask` what it managed to produce.
+pub const STATMOUNT = struct {
+    pub const SB_BASIC: u64 = 1 << 0;
+    pub const MNT_BASIC: u64 = 1 << 1;
+    pub const PROPAGATE_FROM: u64 = 1 << 2;
+    pub const MNT_ROOT: u64 = 1 << 3;
+    pub const MNT_POINT: u64 = 1 << 4;
+    pub const FS_TYPE: u64 = 1 << 5;
+    pub const MNT_NS_ID: u64 = 1 << 6;
+    pub const MNT_OPTS: u64 = 1 << 7;
+};
+
+/// `struct statmount`. Variable length: the strings that were asked for follow
+/// the fixed part, and the u32 fields naming them are byte offsets into that
+/// trailing area rather than pointers.
+pub const Statmount = extern struct {
+    size: u32,
+    mnt_opts: u32,
+    mask: u64,
+    sb_dev_major: u32,
+    sb_dev_minor: u32,
+    sb_magic: u64,
+    sb_flags: u32,
+    fs_type: u32,
+    mnt_id: u64,
+    mnt_parent_id: u64,
+    mnt_id_old: u32,
+    mnt_parent_id_old: u32,
+    mnt_attr: u64,
+    mnt_propagation: u64,
+    mnt_peer_group: u64,
+    mnt_master: u64,
+    propagate_from: u64,
+    mnt_root: u32,
+    mnt_point: u32,
+    mnt_ns_id: u64,
+    spare2: [49]u64,
+
+    /// The string at `offset` in the trailing area of a buffer this was read
+    /// into. `buf` must be the whole buffer, not just the fixed part.
+    pub fn str(buf: []const u8, offset: u32) ?[:0]const u8 {
+        const start = @sizeOf(Statmount) + offset;
+        if (start >= buf.len) {
+            return null;
+        }
+        const rest = buf[start..];
+        const end = std.mem.indexOfScalar(u8, rest, 0) orelse return null;
+        return rest[0..end :0];
+    }
+};
+
+/// The ids of the mounts directly under `mnt_id`. Returns how many were
+/// written into `ids`.
+pub fn listmount(req: *const MountIdReq, ids: []u64, flags: u32) Error!usize {
+    const rc = system.syscall4(
+        .listmount,
+        @intFromPtr(req),
+        @intFromPtr(ids.ptr),
+        ids.len,
+        flags,
+    );
+
+    switch (system.errno(rc)) {
+        .SUCCESS => return rc,
+        .NOENT => return Error.FileNotFound,
+        .NOMEM => return Error.OutOfMemory,
+        .PERM => return Error.PermissionDenied,
+        .INVAL => return Error.InvalidArguments,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+/// Fill `buf` with a `Statmount` for one mount, followed by whatever strings
+/// `req.param` asked for.
+pub fn statmount(req: *const MountIdReq, buf: []u8, flags: u32) Error!void {
+    const rc = system.syscall4(
+        .statmount,
+        @intFromPtr(req),
+        @intFromPtr(buf.ptr),
+        buf.len,
+        flags,
+    );
+
+    switch (system.errno(rc)) {
+        .SUCCESS => {},
+        .NOENT => return Error.FileNotFound,
+        .NOMEM => return Error.OutOfMemory,
+        .PERM => return Error.PermissionDenied,
+        .INVAL => return Error.InvalidArguments,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+/// `struct mount_attr`. As with `MountIdReq`, the kernel tells versions apart
+/// by the size the caller reports.
+pub const MountAttr = extern struct {
+    attr_set: u64 = 0,
+    attr_clr: u64 = 0,
+    propagation: u64 = 0,
+    userns_fd: u64 = 0,
+};
+
+/// Apply mount attributes to an existing mount, which is the only way to get
+/// them onto one that was cloned rather than created: a clone has no `fsmount`
+/// to carry them.
+pub fn mountSetattr(
+    dir_fd: posix.fd_t,
+    path: [*:0]const u8,
+    flags: usize,
+    attr: *const MountAttr,
+) Error!void {
+    switch (system.errno(system.syscall5(
+        .mount_setattr,
+        @bitCast(@as(isize, dir_fd)),
+        @intFromPtr(path),
+        flags,
+        @intFromPtr(attr),
+        @sizeOf(MountAttr),
+    ))) {
+        .SUCCESS => {},
+        .NOENT => return Error.FileNotFound,
+        .INVAL => return Error.InvalidArguments,
+        .PERM => return Error.PermissionDenied,
+        else => |err| return posix.unexpectedErrno(err),
     }
 }
 
@@ -222,6 +372,21 @@ pub fn loopbackSetFD(loopback_device: posix.fd_t, handle: posix.fd_t) !void {
         .SUCCESS => {},
         .BADF => unreachable,
         .INVAL => return error.InvalidBackingFile,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+/// Let go of the backing file a loopback device is holding onto. The device
+/// itself stays; only the reference goes, which is what frees the file when
+/// nothing else is holding it either.
+pub fn loopbackClearFD(loopback_device: posix.fd_t) Error!void {
+    switch (system.errno(system.ioctl(loopback_device, C.LOOP_CLR_FD, 0))) {
+        .SUCCESS => {},
+        // Something is still mounted from it. The kernel is refusing on behalf
+        // of whoever that is, which is exactly what we want it to do.
+        .BUSY => return Error.DeviceBusy,
+        // Nothing was attached to begin with.
+        .NXIO => return Error.DeviceNotBound,
         else => |err| return posix.unexpectedErrno(err),
     }
 }

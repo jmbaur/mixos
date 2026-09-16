@@ -11,6 +11,8 @@ const commands = struct {
     pub const @"test-backdoor" = @import("test-backdoor.zig");
     pub const @"test-network" = @import("test-network.zig");
     pub const modprobe = @import("modprobe.zig");
+    pub const shutdown = @import("shutdown.zig");
+    pub const @"switch-root" = @import("switch-root.zig");
 };
 
 pub fn main(init: std.process.Init) !void {
