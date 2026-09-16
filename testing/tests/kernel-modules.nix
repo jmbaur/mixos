@@ -2,17 +2,9 @@ _: {
   name = "mixos-kernel-modules";
 
   mixos.nodes.machine =
+    { config, lib, ... }:
     {
-      config,
-      lib,
-      pkgs,
-      ...
-    }:
-    {
-      # TODO(jared): formalize this as module option(s)
-      etc."modprobe.d/mixos.conf".source = pkgs.writeText "modprobe-mixos.conf" ''
-        options nvme-tcp wq_unbound=Y
-      '';
+      boot.modprobe.options.nvme-tcp = "wq_unbound=Y";
 
       boot.extraModulePackages = [ config.boot.kernelPackages.jool ];
       boot.kernelModules = [

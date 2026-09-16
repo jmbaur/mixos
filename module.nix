@@ -135,6 +135,24 @@ let
     ) "" possibleActions;
 
   enabledServices = filterAttrs (const (getAttr "enable")) config.services;
+
+  modprobeVerbs = [
+    "alias"
+    "install"
+    "options"
+    "remove"
+    "softdep"
+    "weakdep"
+  ];
+
+  modprobeConf = concatLines (
+    map (module: "blacklist ${module}") config.boot.modprobe.blacklist
+    ++ flatten (
+      map (
+        verb: mapAttrsToList (module: args: "${verb} ${module} ${args}") config.boot.modprobe.${verb}
+      ) modprobeVerbs
+    )
+  );
 in
 {
   imports = [ (mkRenamedOptionModule [ "bin" ] [ "packages" ]) ];
@@ -236,6 +254,95 @@ in
         description = ''
           Kernel modules to load during early bootup.
         '';
+      };
+
+      modprobe = {
+        alias = mkOption {
+          type = types.attrsOf types.str;
+          default = { };
+          example = {
+            "usb:v1D6Bp0001d*" = "my_driver";
+          };
+          description = ''
+            Extra module aliases, keyed by alias (shell-style wildcards
+            allowed).
+          '';
+        };
+
+        blacklist = mkOption {
+          type = types.listOf types.str;
+          default = [ ];
+          example = [ "nouveau" ];
+          description = ''
+            Kernel modules that will not be loaded automatically. Note that
+            this only prevents a module from being loaded by one of its
+            aliases (e.g. by the mdev `$MODALIAS` rule); modprobing a module
+            by its real name still loads it, use `boot.modprobe.install` with
+            `/bin/false` to prevent that as well.
+          '';
+        };
+
+        install = mkOption {
+          type = types.attrsOf types.str;
+          default = { };
+          example = {
+            nouveau = "/bin/false";
+          };
+          description = ''
+            Commands to run instead of inserting a module into the kernel,
+            keyed by module name.
+          '';
+        };
+
+        remove = mkOption {
+          type = types.attrsOf types.str;
+          default = { };
+          example = {
+            mymod = "/bin/rmmod --wait mymod";
+          };
+          description = ''
+            Commands to run instead of removing a module from the kernel,
+            keyed by module name.
+          '';
+        };
+
+        options = mkOption {
+          type = types.attrsOf (types.separatedString " ");
+          default = { };
+          example = {
+            i915 = "enable_psr=0";
+          };
+          description = ''
+            Module parameters to use when loading a module, keyed by module
+            name. Definitions from multiple modules are joined with a space.
+          '';
+        };
+
+        softdep = mkOption {
+          type = types.attrsOf (types.separatedString " ");
+          default = { };
+          example = {
+            hid_generic = "pre: hid_multitouch";
+          };
+          description = ''
+            Soft dependencies to load alongside a module, keyed by module
+            name. Unlike real dependencies, a soft dependency failing to load
+            does not fail the module being loaded.
+          '';
+        };
+
+        weakdep = mkOption {
+          type = types.attrsOf (types.separatedString " ");
+          default = { };
+          example = {
+            mymod = "mymod_helper";
+          };
+          description = ''
+            Weak dependencies of a module, keyed by module name. These are not
+            loaded along with the module, they only record that the modules
+            belong together for tooling that consumes the information.
+          '';
+        };
       };
 
       watchdog.enable = mkOption {
@@ -598,6 +705,11 @@ in
               ) (attrValues config.groups)
             )
           );
+        }
+        {
+          "modprobe.d/mixos.conf" = mkIf (modprobeConf != "") {
+            source = pkgs.writeText "mixos-modprobe.conf" modprobeConf;
+          };
         }
       ];
 
