@@ -33,6 +33,7 @@ let
     hasAttr
     id
     kernel
+    length
     listToAttrs
     literalExpression
     mapAttrs
@@ -675,6 +676,16 @@ in
         }
         (
           let
+            restartEntries = attrNames (filterAttrs (const ({ action, ... }: action == "restart")) enabledInit);
+          in
+          {
+            # Only the first restart action entry is ran by busybox.
+            assertion = length restartEntries <= 1;
+            message = "Only one init entry may have the 'restart' action, since BusyBox init only ever runs the first one. Declared by: ${concatStringsSep ", " restartEntries}";
+          }
+        )
+        (
+          let
             userGids = unique (mapAttrsToList (_: { gid, ... }: gid) config.users);
             groupIds = unique (mapAttrsToList (_: { id, ... }: id) config.groups);
             diff = subtractLists groupIds userGids;
@@ -761,7 +772,7 @@ in
       );
 
       init = {
-        init = {
+        restart = {
           action = "restart";
           process = mkDefault "/bin/init";
         };
