@@ -43,6 +43,7 @@ let
     mkIf
     mkMerge
     mkOption
+    mkPackageOption
     mkRenamedOptionModule
     optional
     optionalString
@@ -54,6 +55,8 @@ let
     ;
 
   osReleaseFormat = pkgs.formats.keyValue { };
+
+  manifestFormat = pkgs.formats.json { };
 
   kernelPackage = config.boot.kernelPackages.kernel;
 
@@ -134,27 +137,27 @@ let
       acc: action: if hasAttr action groups then acc + groups.${action} + "\n" else acc
     ) "" possibleActions;
 
-  enabledServices = filterAttrs (const (getAttr "enable")) config.services;
-
-  modprobeVerbs = [
-    "alias"
-    "install"
-    "options"
-    "remove"
-    "softdep"
-    "weakdep"
-  ];
-
   modprobeConf = concatLines (
     mapAttrsToList (module: const "blacklist ${module}") (
       filterAttrs (const id) config.boot.modprobe.blacklist
     )
     ++ flatten (
-      map (
-        verb: mapAttrsToList (module: args: "${verb} ${module} ${args}") config.boot.modprobe.${verb}
-      ) modprobeVerbs
+      map (verb: mapAttrsToList (module: args: "${verb} ${module} ${args}") config.boot.modprobe.${verb})
+        [
+          "alias"
+          "install"
+          "options"
+          "remove"
+          "softdep"
+          "weakdep"
+        ]
     )
   );
+
+  graphicsDrivers = pkgs.buildEnv {
+    name = "graphics-drivers";
+    paths = [ config.hardware.graphics.package ] ++ config.hardware.graphics.extraPackages;
+  };
 in
 {
   imports = [ (mkRenamedOptionModule [ "bin" ] [ "packages" ]) ];
@@ -355,6 +358,22 @@ in
         description = ''
           Enable watchdog integration. This ensures if the boot process fails,
           the system doesn't hang indefinitely.
+        '';
+      };
+    };
+
+    hardware.graphics = {
+      enable = mkEnableOption "hardware accelerated graphics drivers";
+
+      package = mkPackageOption pkgs "mesa" { };
+
+      extraPackages = mkOption {
+        type = types.listOf types.package;
+        default = [ ];
+        example = literalExpression "[ pkgs.intel-media-driver ]";
+        description = ''
+          Additional packages to add to the driver lookup path. This is how
+          OpenCL, VA-API and VDPAU drivers are made available, among others.
         '';
       };
     };
@@ -928,6 +947,22 @@ in
         '';
       };
 
+      system.build.manifest = manifestFormat.generate "mixos-manifest.json" {
+        inherit (builtins) storeDir;
+        inherit (config.system.build) usr etc;
+        init = getExe' pkgs.busybox "init";
+        storeFS = "/mixos.erofs";
+        boot = {
+          inherit (config.boot) kernelModules;
+          watchdog = if config.boot.watchdog.enable then { } else null;
+        };
+        graphics = if config.hardware.graphics.enable then { drivers = graphicsDrivers; } else null;
+        state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
+        services = mapAttrs (const (flip removeAttrs [ "enable" ])) (
+          filterAttrs (const (getAttr "enable")) config.services
+        );
+      };
+
       system.build.initrd = checkAssertWarn config.assertions config.warnings (
         pkgs.callPackage (
           {
@@ -944,25 +979,7 @@ in
             unsafeDiscardReferences.out = true;
             enableParallelBuilding = true;
 
-            exportReferencesGraph.closure = [
-              config.system.build.usr
-              config.system.build.etc
-            ]
-            ++ optional (config.state.enable && config.state.init != null) config.state.init
-            ++ mapAttrsToList (const (getAttr "run")) enabledServices;
-
-            env.manifest = builtins.toJSON {
-              inherit (builtins) storeDir;
-              inherit (config.system.build) usr etc;
-              init = getExe' pkgs.busybox "init";
-              storeFS = "/mixos.erofs";
-              boot = {
-                inherit (config.boot) kernelModules;
-                watchdog = if config.boot.watchdog.enable then { } else null;
-              };
-              state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
-              services = mapAttrs (const (flip removeAttrs [ "enable" ])) enabledServices;
-            };
+            exportReferencesGraph.closure = [ config.system.build.manifest ];
 
             nativeBuildInputs = [
               config.mixos.package.buildtools # only works because buildtools is always built for buildPlatform
@@ -1057,7 +1074,7 @@ in
 
               install -Dm0755 ${getExe config.mixos.package} initrd/init
 
-              jq -r '.env.manifest' <"$NIX_ATTRS_JSON_FILE" >initrd/manifest.json
+              install -Dm0644 ${config.system.build.manifest} initrd/manifest.json
               install -Dm0644 mixos.erofs initrd/mixos.erofs
               (cd initrd && find . -print0 | sort -z | cpio --quiet -o -H newc -R +0:+0 --reproducible --null | eval -- xz --check=crc32 --lzma2=dict=512KiB >> "$out/initrd")
             '';

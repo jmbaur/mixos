@@ -22,6 +22,11 @@ const BootConfig = struct {
     watchdog: ?WatchdogConfig,
 };
 
+const GraphicsConfig = struct {
+    /// The store path holding the graphics drivers.
+    drivers: []const u8,
+};
+
 const StateConfig = struct {
     /// Path to program to run to initialize state storage
     init: ?[]const u8,
@@ -53,6 +58,8 @@ const Manifest = struct {
     etc: []const u8,
 
     boot: BootConfig,
+
+    graphics: ?GraphicsConfig,
 
     state: ?StateConfig,
 
@@ -171,6 +178,14 @@ fn setupRoot(
     root_dir.symLink(io, "usr/bin", "/bin", .{ .is_directory = true }) catch {};
     root_dir.symLink(io, "usr/sbin", "/sbin", .{ .is_directory = true }) catch {};
     root_dir.symLink(io, "usr/lib", "/lib", .{ .is_directory = true }) catch {};
+
+    // For compatibility with graphics-related packages from nixpkgs, we
+    // symlink to /run/opengl-driver.
+    if (manifest.graphics) |graphics| {
+        root_dir.symLink(io, graphics.drivers, "/run/opengl-driver", .{ .is_directory = true }) catch |err| {
+            log.err("failed to setup /run/opengl-driver: {}", .{err});
+        };
+    }
 }
 
 /// By the point this runs, we already have /sys, /dev, and /proc mounted.
