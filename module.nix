@@ -146,7 +146,9 @@ let
   ];
 
   modprobeConf = concatLines (
-    map (module: "blacklist ${module}") config.boot.modprobe.blacklist
+    mapAttrsToList (module: const "blacklist ${module}") (
+      filterAttrs (const id) config.boot.modprobe.blacklist
+    )
     ++ flatten (
       map (
         verb: mapAttrsToList (module: args: "${verb} ${module} ${args}") config.boot.modprobe.${verb}
@@ -270,9 +272,11 @@ in
         };
 
         blacklist = mkOption {
-          type = types.listOf types.str;
-          default = [ ];
-          example = [ "nouveau" ];
+          type = types.attrsOf types.bool;
+          default = { };
+          example = {
+            nouveau = true;
+          };
           description = ''
             Kernel modules that will not be loaded automatically. Note that
             this only prevents a module from being loaded by one of its
@@ -707,7 +711,7 @@ in
           );
         }
         {
-          "modprobe.d/mixos.conf" = mkIf (modprobeConf != "") {
+          "modprobe.d/00-mixos.conf" = mkIf (modprobeConf != "") {
             source = pkgs.writeText "mixos-modprobe.conf" modprobeConf;
           };
         }

@@ -4,7 +4,10 @@ _: {
   mixos.nodes.machine =
     { config, lib, ... }:
     {
-      boot.modprobe.options.nvme-tcp = "wq_unbound=Y";
+      boot.modprobe = {
+        options.nvme-tcp = "wq_unbound=Y";
+        blacklist.foo = true;
+      };
 
       boot.extraModulePackages = [ config.boot.kernelPackages.jool ];
       boot.kernelModules = [
