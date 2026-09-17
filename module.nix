@@ -61,6 +61,31 @@ let
 
   kernelPackage = config.boot.kernelPackages.kernel;
 
+  # NOTE: must have __structuredAttrs and exportReferencesGraph.closure set
+  buildStoreErofs = dest: ''
+    mkdir -p store
+
+    for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do
+      cp -r $output_path store/
+    done
+
+    erofs_zip=
+    if kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_LZMA 2>/dev/null; then
+      erofs_zip="-zlzma"
+    elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_ZSTD 2>/dev/null; then
+      erofs_zip="-zzstd"
+    elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_DEFLATE 2>/dev/null; then
+      erofs_zip="-zdeflate"
+    else
+      echo "could not detect erofs compression algorithm, using none"
+    fi
+    if [[ -n "$erofs_zip" ]]; then
+      echo "Using $erofs_zip for erofs compression"
+    fi
+
+    mkfs.erofs $erofs_zip -L mixos -U ${config.mixos.storeUUID} --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH ${dest} store
+  '';
+
   hasModules = kernelPackage.config.isYes "MODULES";
 
   possibleActions = [
@@ -655,6 +680,14 @@ in
         '';
       };
 
+      storeUUID = mkOption {
+        type = types.str;
+        default = "cb67e325-87bc-4235-b2fd-cd5d54efe14b";
+        description = ''
+          UUID of the erofs image, fixed for reproducibility.
+        '';
+      };
+
       testing.enable = mkEnableOption "the mixos test backdoor service";
     };
   };
@@ -930,6 +963,51 @@ in
         '';
       };
 
+      system.build.manifest = manifestFormat.generate "mixos-manifest.json" {
+        inherit (builtins) storeDir;
+        inherit (config.system.build) usr etc;
+        init = getExe' pkgs.busybox "init";
+        storeFS = "/mixos.erofs";
+        boot = {
+          inherit (config.boot) kernelModules;
+          watchdog = if config.boot.watchdog.enable then { } else null;
+        };
+        graphics = if config.hardware.graphics.enable then { drivers = graphicsDrivers; } else null;
+        state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
+        services = mapAttrs (const (flip removeAttrs [ "enable" ])) (
+          filterAttrs (const (getAttr "enable")) config.services
+        );
+      };
+
+      # Can be used with "mixos switch-root", along with config.system.build.manifest
+      #
+      # TODO(jared): Perhaps find a way to ship the manifest and erofs image
+      # together, or move to DDIs?
+      system.build.erofs = pkgs.callPackage (
+        {
+          erofs-utils,
+          jq,
+          stdenvNoCC,
+        }:
+        stdenvNoCC.mkDerivation {
+          name = "mixos-store.erofs";
+
+          __structuredAttrs = true;
+          unsafeDiscardReferences.out = true;
+          enableParallelBuilding = true;
+
+          exportReferencesGraph.closure = [ config.system.build.manifest ];
+
+          nativeBuildInputs = [
+            config.mixos.package.buildtools
+            erofs-utils
+            jq
+          ];
+
+          buildCommand = buildStoreErofs "$out";
+        }
+      ) { };
+
       system.build.usr = pkgs.buildEnv {
         name = "mixos-usr";
         paths = [
@@ -956,22 +1034,6 @@ in
             ln -sf $out/bin/mixos $out/$dir/modprobe
           done
         '';
-      };
-
-      system.build.manifest = manifestFormat.generate "mixos-manifest.json" {
-        inherit (builtins) storeDir;
-        inherit (config.system.build) usr etc;
-        init = getExe' pkgs.busybox "init";
-        storeFS = "/mixos.erofs";
-        boot = {
-          inherit (config.boot) kernelModules;
-          watchdog = if config.boot.watchdog.enable then { } else null;
-        };
-        graphics = if config.hardware.graphics.enable then { drivers = graphicsDrivers; } else null;
-        state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;
-        services = mapAttrs (const (flip removeAttrs [ "enable" ])) (
-          filterAttrs (const (getAttr "enable")) config.services
-        );
       };
 
       system.build.initrd = checkAssertWarn config.assertions config.warnings (
@@ -1051,7 +1113,7 @@ in
                 kconfig ${kernelPackage.configfile} --assert-yes MODULE_DECOMPRESS
               fi
 
-              mkdir -p store initrd $out
+              mkdir -p initrd $out
 
               # Copy kernel modules that are crucial for booting. We don't need
               # to provide any user-customizability here since the root
@@ -1064,24 +1126,7 @@ in
                 ${config.system.build.kernelModules}/lib/modules/${kernelPackage.modDirVersion}/modules.* \
                 initrd/lib/modules/${kernelPackage.modDirVersion}
 
-              for output_path in $(jq -r '.closure[].path' <"$NIX_ATTRS_JSON_FILE"); do
-                cp -r $output_path store/
-              done
-
-              erofs_zip=
-              if kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_LZMA 2>/dev/null; then
-                erofs_zip="-zlzma"
-              elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_ZSTD 2>/dev/null; then
-                erofs_zip="-zzstd"
-              elif kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_DEFLATE 2>/dev/null; then
-                erofs_zip="-zdeflate"
-              else
-                echo "could not detect erofs compression algorithm, using none"
-              fi
-              if [[ -n "$erofs_zip" ]]; then
-                echo "Using $erofs_zip for erofs compression"
-              fi
-              mkfs.erofs $erofs_zip -L mixos --force-uid=0 --force-gid=0 --workers=$NIX_BUILD_CORES -T$SOURCE_DATE_EPOCH mixos.erofs store
+              ${buildStoreErofs "mixos.erofs"}
 
               install -Dm0755 ${getExe config.mixos.package} initrd/init
 
