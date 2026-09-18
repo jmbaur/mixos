@@ -1025,6 +1025,6 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
         argv_buf.ptr,
         std.process.Environ.empty.block.slice,
     ));
-    log.err("execve PID1 failed: {}", .{err});
+    log.err("execve '{s}' failed: {}", .{ stage2_init, err });
     @panic("PANIC");
 }

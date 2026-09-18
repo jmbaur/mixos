@@ -22,5 +22,9 @@
             .url = "https://github.com/jmbaur/zig-varlink/archive/c083558a083b3f7a23754f57f4fca1962d8e71fe.tar.gz",
             .hash = "zig_varlink-0.1.0-nZ9B9mYjAgBkwiJroOPIK9QtM3YGd5BABFMI9Jv5hE9U",
         },
+        .clap = .{
+            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.12.0.tar.gz",
+            .hash = "clap-0.12.0-oBajB7foAQDqlSwaSG5g0yq7xGbQARUsBk5T64gAOqP5",
+        },
     },
 }

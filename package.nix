@@ -72,7 +72,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   passthru.deps = buildPackages.zig_0_16.fetchDeps {
     pname = "mixos";
     inherit (finalAttrs) src version;
-    hash = "sha256-AibAg0fTfKpT4RHMLliocerMt932J+vJpKrIYtWsS4Q=";
+    hash = "sha256-A3pySKRvLqRuNEP0AwEIYemVG6l5iysmYX7B/GVHumQ=";
   };
 
   meta = {

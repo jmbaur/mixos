@@ -1,4 +1,13 @@
 const std = @import("std");
+const clap = @import("clap");
+
+const params = clap.parseParamsComptime(
+    \\-h, --help  Display this help and exit.
+    \\<config>    The network configuration to apply, as a path to a JSON file.
+    \\
+);
+
+const parsers = .{ .config = clap.parsers.string };
 
 const netlink = @import("netlink.zig");
 const syslog = @import("syslog.zig");
@@ -34,7 +43,24 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
 
     const allocator = init.arena.allocator();
 
-    const config_path = args.next() orelse return error.InvalidArguments;
+    var diag: clap.Diagnostic = .{};
+    var res = clap.parseEx(clap.Help, &params, parsers, args, .{
+        .diagnostic = &diag,
+        .allocator = allocator,
+    }) catch |err| {
+        diag.reportToFile(init.io, .stderr(), err) catch {};
+        return err;
+    };
+    defer res.deinit();
+
+    if (res.args.help != 0) {
+        return clap.helpToFile(init.io, .stdout(), clap.Help, &params, .{});
+    }
+
+    const config_path = res.positionals[0] orelse {
+        try clap.helpToFile(init.io, .stderr(), clap.Help, &params, .{});
+        return error.InvalidArguments;
+    };
 
     const config_file = try std.Io.Dir.cwd().openFile(init.io, config_path, .{});
     defer config_file.close(init.io);

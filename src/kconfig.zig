@@ -1,4 +1,5 @@
 const std = @import("std");
+const clap = @import("clap");
 
 const KconfigSelection = union(enum) {
     unset,
@@ -172,17 +173,57 @@ test parseKconfigLine {
 
 const Kconfig = std.StringHashMapUnmanaged(KconfigSelection);
 
+const params = clap.parseParamsComptime(
+    \\-h, --help                        Display this help and exit.
+    \\    --assert-yes <name>...        CONFIG_<name> must be y.
+    \\    --assert-yes-or-module <name>...  CONFIG_<name> must be y or m.
+    \\    --assert-no <name>...         CONFIG_<name> must be n.
+    \\    --assert-unset <name>...      CONFIG_<name> must be unset, or absent.
+    \\    --assert-value <name=value>...  CONFIG_<name> must be exactly value.
+    \\<file>                            The kernel configuration to read.
+    \\
+);
+
+const Assignment = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+fn assignment(in: []const u8) error{MissingValue}!Assignment {
+    var split = std.mem.splitScalar(u8, in, '=');
+    const name = split.next() orelse return error.MissingValue;
+    const value = split.rest();
+
+    return .{ .name = name, .value = value };
+}
+
+const parsers = .{
+    .name = clap.parsers.string,
+    .@"name=value" = assignment,
+    .file = clap.parsers.string,
+};
+
 pub fn main(init: std.process.Init) !void {
     const allocator = init.arena.allocator();
 
-    var args = init.minimal.args.iterate();
-    defer args.deinit();
+    var diag: clap.Diagnostic = .{};
+    var res = clap.parse(clap.Help, &params, parsers, init.minimal.args, .{
+        .diagnostic = &diag,
+        .allocator = allocator,
+    }) catch |err| {
+        diag.reportToFile(init.io, .stderr(), err) catch {};
+        return err;
+    };
+    defer res.deinit();
 
-    if (!args.skip()) {
-        return error.InvalidArguments;
+    if (res.args.help != 0) {
+        return clap.helpToFile(init.io, .stdout(), clap.Help, &params, .{});
     }
 
-    const kconfig_filepath = args.next() orelse return error.InvalidArguments;
+    const kconfig_filepath = res.positionals[0] orelse {
+        try clap.helpToFile(init.io, .stderr(), clap.Help, &params, .{});
+        return error.InvalidArguments;
+    };
 
     var kconfig_file = try std.Io.Dir.cwd().openFile(init.io, kconfig_filepath, .{});
     defer kconfig_file.close(init.io);
@@ -215,51 +256,50 @@ pub fn main(init: std.process.Init) !void {
 
     var assertion_failed = false;
 
-    while (args.next()) |arg| {
-        if (std.mem.eql(u8, arg, "--assert-yes")) {
-            const name = args.next() orelse return error.InvalidArguments;
-            const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
-            if (selection != .yes) {
-                std.log.err("CONFIG_{s} is not yes", .{name});
+    for (res.args.@"assert-yes") |name| {
+        const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
+        if (selection != .yes) {
+            std.log.err("CONFIG_{s} is not yes", .{name});
+            assertion_failed = true;
+        }
+    }
+
+    for (res.args.@"assert-yes-or-module") |name| {
+        const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
+        if (selection != .yes and selection != .module) {
+            std.log.err("CONFIG_{s} is not yes or module", .{name});
+            assertion_failed = true;
+        }
+    }
+
+    for (res.args.@"assert-no") |name| {
+        const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
+        if (selection != .no) {
+            std.log.err("CONFIG_{s} is not no", .{name});
+            assertion_failed = true;
+        }
+    }
+
+    for (res.args.@"assert-unset") |name| {
+        // entries that are not present at all count as unset
+        const selection = kconfig.get(name) orelse continue;
+        if (selection != .unset) {
+            std.log.err("CONFIG_{s} is not unset", .{name});
+            assertion_failed = true;
+        }
+    }
+
+    for (res.args.@"assert-value") |expected| {
+        const selection = kconfig.get(expected.name) orelse return error.MissingKconfigEntry;
+        switch (selection) {
+            .value => |actual| if (!std.mem.eql(u8, unquote(actual), unquote(expected.value))) {
+                std.log.err("CONFIG_{s} is {s}, not {s}", .{ expected.name, actual, expected.value });
                 assertion_failed = true;
-            }
-        } else if (std.mem.eql(u8, arg, "--assert-yes-or-module")) {
-            const name = args.next() orelse return error.InvalidArguments;
-            const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
-            if (selection != .yes and selection != .module) {
-                std.log.err("CONFIG_{s} is not yes or module", .{name});
+            },
+            else => {
+                std.log.err("CONFIG_{s} is not {s}", .{ expected.name, expected.value });
                 assertion_failed = true;
-            }
-        } else if (std.mem.eql(u8, arg, "--assert-no")) {
-            const name = args.next() orelse return error.InvalidArguments;
-            const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
-            if (selection != .no) {
-                std.log.err("CONFIG_{s} is not no", .{name});
-                assertion_failed = true;
-            }
-        } else if (std.mem.eql(u8, arg, "--assert-value")) {
-            const name = args.next() orelse return error.InvalidArguments;
-            const expected = args.next() orelse return error.InvalidArguments;
-            const selection = kconfig.get(name) orelse return error.MissingKconfigEntry;
-            switch (selection) {
-                .value => |actual| if (!std.mem.eql(u8, unquote(actual), unquote(expected))) {
-                    std.log.err("CONFIG_{s} is {s}, not {s}", .{ name, actual, expected });
-                    assertion_failed = true;
-                },
-                else => {
-                    std.log.err("CONFIG_{s} is not {s}", .{ name, expected });
-                    assertion_failed = true;
-                },
-            }
-        } else if (std.mem.eql(u8, arg, "--assert-unset")) {
-            const name = args.next() orelse return error.InvalidArguments;
-            const selection = kconfig.get(name) orelse continue; // consider entries not present to be unset
-            if (selection != .unset) {
-                std.log.err("CONFIG_{s} is not unset", .{name});
-                assertion_failed = true;
-            }
-        } else {
-            return error.InvalidArguments;
+            },
         }
     }
 

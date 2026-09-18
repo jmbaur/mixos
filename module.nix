@@ -1071,8 +1071,7 @@ in
                       if value ? freeform then
                         [
                           "--assert-value"
-                          kconfig
-                          value.freeform
+                          "${kconfig}=${value.freeform}"
                         ]
                       else if value.tristate == null then
                         [

@@ -1,4 +1,14 @@
 const std = @import("std");
+const clap = @import("clap");
+
+const params = clap.parseParamsComptime(
+    \\-h, --help  Display this help and exit.
+    \\<listen>    Where to listen, as vsock:<port>, unix:<path> or <ip>:<port>.
+    \\            Left out, the kernel cmdline is consulted and then guessed at.
+    \\
+);
+
+const parsers = .{ .listen = clap.parsers.string };
 const posix = std.posix;
 
 const mixos_varlink = @import("mixos_varlink");
@@ -248,13 +258,27 @@ pub fn main(
     syslog.init(name);
     defer syslog.deinit();
 
+    var diag: clap.Diagnostic = .{};
+    var res = clap.parseEx(clap.Help, &params, parsers, args, .{
+        .diagnostic = &diag,
+        .allocator = init.arena.allocator(),
+    }) catch |err| {
+        diag.reportToFile(init.io, .stderr(), err) catch {};
+        return err;
+    };
+    defer res.deinit();
+
+    if (res.args.help != 0) {
+        return clap.helpToFile(init.io, .stdout(), clap.Help, &params, .{});
+    }
+
     var listen_param = try detectDefaultListenParams(init.io);
 
     if (try parseKernelCmdline(init.io)) |param| {
         listen_param = param;
     }
 
-    if (args.next()) |arg| {
+    if (res.positionals[0]) |arg| {
         listen_param = try ListenParam.parse(arg);
     }
 

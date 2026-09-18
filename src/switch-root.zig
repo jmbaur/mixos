@@ -1,21 +1,8 @@
-//! Replace the running system with another one, without rebooting the machine.
-//!
-//! This has to run as PID1, since the whole point is to replace the init that
-//! is running. Busybox's init will do that for us: an inittab entry with the
-//! "restart" action is exec'd in place of init when it receives SIGQUIT, after
-//! it has run the shutdown actions and killed everything else off. So the way
-//! to get here is to put this command in such an entry and send that signal.
-//!
-//! The system to switch into is expected at `init.sysroot` and nowhere else, so
-//! that there is no way to name one the shutdown before us has already taken
-//! down. Everything this command is told is named relative to there.
-//!
-//! Told nothing, it brings the running system up again out of the manifest it
-//! was itself brought up from. That is what makes this a restart rather than
-//! only a handover: the shutdown before us takes the runtime layout apart, and
-//! nothing else puts it back.
+//! Replaces the running system with another one, without rebooting the
+//! machine. Intended to be used with busybox's restart inittab action.
 
 const std = @import("std");
+const clap = @import("clap");
 const system = std.os.linux;
 
 const Mount = @import("mount.zig");
@@ -24,44 +11,37 @@ const linux = @import("linux.zig");
 const log = std.log.scoped(.mixos);
 const kmsg = @import("kmsg.zig");
 
-const usage =
-    \\usage: switch-root [manifest]
+const params = clap.parseParamsComptime(
+    \\-h, --help  Display this help and exit.
+    \\<manifest>  The new system's manifest, as a path within /sysroot. Left
+    \\            out, the running system is brought up again.
     \\
-    \\  manifest  the new system's manifest, as a path within /sysroot.
-    \\            Left out, the running system is brought up again.
-    \\
-;
+);
 
-/// Loopback devices, so that one can be told apart from any other block device
-/// by the number alone.
-const LOOP_MAJOR = 7;
+const parsers = .{ .manifest = clap.parsers.string };
 
-/// The loopback device the system we are running from lives on, if it is on one
-/// at all.
-///
-/// Asked before pivoting, while that system is still mounted and can still
-/// answer. The binary executing this is in its store by definition, so the
-/// filesystem underneath it is the store, whatever it happens to be called.
 fn loopDeviceBackingSelf() ?u32 {
     var stx: system.Statx = undefined;
 
-    const rc = system.statx(system.AT.FDCWD, "/proc/self/exe", 0, .{}, &stx);
-    if (system.errno(rc) != .SUCCESS) {
+    if (system.errno(system.statx(
+        system.AT.FDCWD,
+        "/proc/self/exe",
+        0,
+        .{},
+        &stx,
+    )) != .SUCCESS) {
         return null;
     }
 
-    if (stx.dev_major != LOOP_MAJOR) {
+    if (stx.dev_major != linux.LOOP_MAJOR) {
         return null;
     }
 
     return stx.dev_minor;
 }
 
-/// The name the kernel gives a block device we know only by number.
-///
-/// Asked rather than assumed. With the loopback driver set up for partitions
-/// the minor numbers are spaced out, so the minor is no longer the number in
-/// the name and "/dev/loop" ++ minor would be some other device entirely.
+// Obtain loopback device name from sysfs rather than assuming block device
+// name under devtmpfs.
 fn blockDeviceName(io: std.Io, out: []u8, major: u32, minor: u32) ?[]const u8 {
     var sys_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const sys_path = std.fmt.bufPrint(
@@ -82,24 +62,12 @@ fn blockDeviceName(io: std.Io, out: []u8, major: u32, minor: u32) ?[]const u8 {
     return out[0..name.len];
 }
 
-/// Let go of the loopback device the system we just left was running from.
-///
-/// Only that one, and only once nothing is mounted from it. An initrd boot puts
-/// the whole store image in a memfd and attaches it here, so what is being
-/// handed back is a copy of a system that has stopped running, sitting in RAM
-/// with nothing left to read it. Nobody else will do it: the initrd that set it
-/// up is long gone, and the device holds its reference until told otherwise.
-///
-/// Every other loopback device on the machine is somebody else's -- a disk
-/// image a user attached, something a service set up -- and detaching one of
-/// those destroys what it was doing, with no warning and nothing to undo it.
-/// So the device is named by the kernel from the system that was actually
-/// running, and checked to be that one again once open, rather than being
-/// guessed at or found by sweeping /dev for whatever looks unused.
+/// Ensures the loopback device that is setup during early boot is released
+/// from memory, since it is no longer being accessed.
 fn releaseLoopDevice(io: std.Io, minor: u32) void {
     var name_buf: [std.fs.max_name_bytes]u8 = undefined;
-    const name = blockDeviceName(io, &name_buf, LOOP_MAJOR, minor) orelse {
-        log.warn("cannot name loopback device {d}:{d}, leaving it alone", .{ LOOP_MAJOR, minor });
+    const name = blockDeviceName(io, &name_buf, linux.LOOP_MAJOR, minor) orelse {
+        log.warn("failed to find block device path for loopback device {d}:{d}, leaving it alone", .{ linux.LOOP_MAJOR, minor });
         return;
     };
 
@@ -107,32 +75,21 @@ fn releaseLoopDevice(io: std.Io, minor: u32) void {
     const path = std.fmt.bufPrint(&path_buf, "/dev/{s}", .{name}) catch return;
 
     const device = std.Io.Dir.cwd().openFile(io, path, .{ .mode = .read_write }) catch |err| {
-        log.warn("cannot open {s} to release it: {}", .{ path, err });
+        log.warn("failed to open {s}: {}", .{ path, err });
         return;
     };
     defer device.close(io);
 
-    // What we opened is what we meant to open. Everything past here is a thing
-    // done to whatever is on the other end of this descriptor, so being wrong
-    // about which device that is has to be impossible rather than unlikely.
-    var stx: system.Statx = undefined;
-    const rc = system.statx(device.handle, "", system.AT.EMPTY_PATH, .{}, &stx);
-    if (system.errno(rc) != .SUCCESS or stx.rdev_major != LOOP_MAJOR or stx.rdev_minor != minor) {
-        log.warn("{s} is not the device the previous system was on, leaving it alone", .{path});
-        return;
-    }
-
     linux.loopbackClearFD(device.handle) catch |err| switch (err) {
-        // Mounted after all, or never had anything on it. Either way there is
-        // nothing here to give back.
+        // nothing to do
         error.DeviceBusy, error.DeviceNotBound => return,
         else => {
-            log.warn("cannot detach {s}: {}", .{ path, err });
+            log.warn("failed to detach {s}: {}", .{ path, err });
             return;
         },
     };
 
-    log.info("released {s}, which the previous system was running from", .{path});
+    log.debug("released {s}", .{path});
 }
 
 pub fn main(
@@ -145,27 +102,29 @@ pub fn main(
     kmsg.init(init.io);
     defer kmsg.deinit();
 
-    // Replacing PID1 is the entire operation; as anyone else we would merely
-    // detach ourselves from the system and leave the real init behind.
-    if (system.getpid() != 1) {
-        log.err("not running as PID1, refusing to continue", .{});
-        return error.NotPid1;
-    }
-
-    // The manifest of a system staged at /sysroot, or nothing at all to bring
-    // the running system up again.
-    const staged = args.next();
-
-    if (args.next() != null) {
-        log.err("{s}", .{usage});
-        return error.TooManyArguments;
-    }
-
     const allocator = init.arena.allocator();
 
-    // Read out before anything is mounted or pivoted: this is the last point at
-    // which giving up costs nothing. Past it, init has already killed the rest
-    // of the system off, so failures are named rather than left as an errno.
+    var diag: clap.Diagnostic = .{};
+    var res = clap.parseEx(clap.Help, &params, parsers, args, .{
+        .diagnostic = &diag,
+        .allocator = allocator,
+    }) catch |err| {
+        diag.reportToFile(init.io, .stderr(), err) catch {};
+        return err;
+    };
+    defer res.deinit();
+
+    if (res.args.help != 0) {
+        return clap.helpToFile(init.io, .stdout(), clap.Help, &params, .{});
+    }
+
+    if (system.getpid() != 1) {
+        log.err("not running as PID1, refusing to continue", .{});
+        @panic("PANIC");
+    }
+
+    const staged = res.positionals[0];
+
     const from = if (staged == null) "/" else init_mod.sysroot;
     const manifest_relative = std.mem.trimStart(
         u8,
@@ -206,16 +165,11 @@ pub fn main(
     var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
     defer root_dir.close(init.io);
 
-    // Asked while the system we are leaving is still mounted; acted on further
-    // down, once it is not. Nothing is being handed back when the system coming
-    // up is the one already running: it stays on the device it is on.
+    // Ensure we know which loop device we might need to release after
+    // switching, to ensure we can clean up resources from the first system.
     const old_loop_device = if (staged == null) null else loopDeviceBackingSelf();
 
-    if (staged == null) {
-        log.info("bringing the running system up again, described by {s}", .{init_mod.manifest_path});
-    } else {
-        log.info("switching to {s}", .{init_mod.sysroot});
-    }
+    log.info("switching to {s}", .{if (staged == null) "/" else init_mod.sysroot});
 
     try init_mod.switchRoot(init.io, root_dir);
 
@@ -231,13 +185,10 @@ pub fn main(
         .{ .tree = &store },
     );
 
-    // Only now, with the new system mounted and the old root detached, is what
-    // the old one was running from actually unused.
     if (old_loop_device) |minor| {
         releaseLoopDevice(init.io, minor);
     }
 
-    // Everything below this point belongs to the new system.
     const argv_buf = try stage2_fba.allocator().allocSentinel(?[*:0]const u8, 1, null);
     argv_buf[0] = stage2_init;
 
@@ -246,6 +197,6 @@ pub fn main(
         argv_buf.ptr,
         std.process.Environ.empty.block.slice,
     ));
-    log.err("execve of new init '{s}' failed: {}", .{ stage2_init, err });
+    log.err("execve '{s}' failed: {}", .{ stage2_init, err });
     @panic("PANIC");
 }

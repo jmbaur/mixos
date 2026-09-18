@@ -30,7 +30,8 @@ in
         machine.wait_for_console_text("executing init")
         machine.connected = False
         machine.connect()
-        print(machine.succeed("hello"))
+        machine.succeed("hello")
+        assert "/dev/loop0" == machine.succeed("losetup -f").strip()
 
     with subtest("restart with nothing staged"):
         machine.fail("test -e /sysroot")

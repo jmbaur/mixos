@@ -5,6 +5,7 @@ const system = std.os.linux;
 const C = @cImport({
     @cInclude("fcntl.h");
     @cInclude("linux/loop.h");
+    @cInclude("linux/major.h");
     @cInclude("linux/mount.h");
     @cInclude("linux/watchdog.h");
 });
@@ -376,6 +377,8 @@ pub fn waitid(id_type: system.P, id: i32, infop: *system.siginfo_t, flags: u32, 
         break;
     }
 }
+
+pub const LOOP_MAJOR = C.LOOP_MAJOR;
 
 pub fn loopbackGetFree(io: std.Io) !usize {
     const loop_control = try std.Io.Dir.cwd().openFile(io, "/dev/loop-control", .{ .mode = .read_write });

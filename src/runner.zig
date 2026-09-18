@@ -1,6 +1,16 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const clap = @import("clap");
 const cpio = @import("cpio");
+
+const params = clap.parseParamsComptime(
+    \\-h, --help    Display this help and exit.
+    \\<executable>  The mixos executable to boot as init. Anything after it is
+    \\              handed to qemu as it stands.
+    \\
+);
+
+const parsers = .{ .executable = clap.parsers.string };
 
 pub fn main(init: std.process.Init) !void {
     const arena_alloc = init.arena.allocator();
@@ -9,7 +19,28 @@ pub fn main(init: std.process.Init) !void {
     if (!args.skip()) {
         return error.InvalidArguments;
     }
-    const mixos_executable = args.next() orelse return error.InvalidArguments;
+
+    var diag: clap.Diagnostic = .{};
+    var res = clap.parseEx(clap.Help, &params, parsers, &args, .{
+        .diagnostic = &diag,
+        .allocator = arena_alloc,
+        // Stop at the executable, so that everything after it is left in the
+        // iterator to be handed to qemu with its own flags intact.
+        .terminating_positional = 0,
+    }) catch |err| {
+        diag.reportToFile(init.io, .stderr(), err) catch {};
+        return err;
+    };
+    defer res.deinit();
+
+    if (res.args.help != 0) {
+        return clap.helpToFile(init.io, .stdout(), clap.Help, &params, .{});
+    }
+
+    const mixos_executable = res.positionals[0] orelse {
+        try clap.helpToFile(init.io, .stderr(), clap.Help, &params, .{});
+        return error.InvalidArguments;
+    };
 
     const kernel = init.environ_map.get("MIXOS_KERNEL") orelse return error.InvalidArguments;
     const initial_initrd = init.environ_map.get("MIXOS_INITRD") orelse return error.InvalidArguments;

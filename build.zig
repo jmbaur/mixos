@@ -128,6 +128,8 @@ pub fn build(b: *std.Build) void {
 
     const cpio_dep = b.dependency("cpio", .{});
 
+    const clap_dep = b.dependency("clap", .{});
+
     const libmnl_dep = b.dependency("libmnl", .{});
     const libmnl = b.addLibrary(.{
         .name = "mnl",
@@ -156,6 +158,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    kconfig.root_module.addImport("clap", clap_dep.module("clap"));
     b.getInstallStep().dependOn(&b.addInstallArtifact(kconfig, .{
         .dest_dir = .{ .override = buildtools_dir },
     }).step);
@@ -169,6 +172,7 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    copy_modules_closure.root_module.addImport("clap", clap_dep.module("clap"));
     copy_modules_closure.root_module.linkLibrary(addLibkmod(b, buildtools_target, optimize));
     b.getInstallStep().dependOn(&b.addInstallArtifact(copy_modules_closure, .{
         .dest_dir = .{ .override = buildtools_dir },
@@ -183,6 +187,7 @@ pub fn build(b: *std.Build) void {
         .strip = false, // let stdenv strip hook do this for us, giving us debug info integration
         .link_libc = true,
     });
+    mixos_module.addImport("clap", clap_dep.module("clap"));
     mixos_module.linkLibrary(libmnl);
     mixos_module.linkLibrary(libkmod);
     mixos_module.addImport("varlink", varlink_dep.module("varlink"));
@@ -210,6 +215,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     mixos_runner.root_module.addImport("cpio", cpio_dep.module("cpio"));
+    mixos_runner.root_module.addImport("clap", clap_dep.module("clap"));
 
     const runner_tool = b.addRunArtifact(mixos_runner);
     runner_tool.addArtifactArg(mixos);
@@ -226,6 +232,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    unit_tests_module.addImport("clap", clap_dep.module("clap"));
     unit_tests_module.linkLibrary(libkmod);
 
     const unit_tests = b.addTest(.{
