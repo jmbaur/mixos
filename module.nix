@@ -807,7 +807,7 @@ in
       init = {
         restart = {
           action = "restart";
-          process = mkDefault "/bin/init";
+          process = mkDefault "/bin/mixos switch-root";
         };
 
         reboot = {
@@ -815,14 +815,9 @@ in
           process = mkDefault "/bin/reboot";
         };
 
-        umount = {
+        shutdown = {
           action = "shutdown";
-          process = mkDefault "/bin/umount -a -r";
-        };
-
-        swapoff = {
-          action = "shutdown";
-          process = mkDefault "/bin/swapoff -a";
+          process = mkDefault "/bin/mixos shutdown";
         };
 
         runsvdir = {
@@ -916,6 +911,7 @@ in
             "RD_XZ"
             "TIMERFD"
             "TMPFS"
+            "TMPFS_XATTR"
           ]
           ++ optional (config.boot.firmware != [ ]) "FW_LOADER_COMPRESS_XZ"
         ) (const kernel.yes))
@@ -1130,7 +1126,7 @@ in
 
               install -Dm0755 ${getExe config.mixos.package} initrd/init
 
-              install -Dm0644 ${config.system.build.manifest} initrd/manifest.json
+              install -Dm0644 ${config.system.build.manifest} initrd/.manifest.json
               install -Dm0644 mixos.erofs initrd/mixos.erofs
               (cd initrd && find . -print0 | sort -z | cpio --quiet -o -H newc -R +0:+0 --reproducible --null | eval -- xz --check=crc32 --lzma2=dict=512KiB >> "$out/initrd")
             '';

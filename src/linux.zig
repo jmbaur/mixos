@@ -19,6 +19,9 @@ pub fn setHostname(hostname: []const u8) !void {
 }
 
 pub const Error = error{
+    AlreadyMounted,
+    DeviceBusy,
+    DeviceNotBound,
     FileNotFound,
     FilesystemFdUsed,
     InvalidArguments,
@@ -64,6 +67,7 @@ pub fn fsconfig(fd: posix.fd_t, cmd: usize, key: ?[*:0]const u8, value: ?[*:0]co
         aux,
     ))) {
         .SUCCESS => {},
+        .BUSY => return Error.DeviceBusy,
         .ACCES, .FAULT, .INVAL => return Error.InvalidArguments,
         .NODEV => return Error.UnsupportedFilesystem,
         .NOMEM => return Error.OutOfMemory,
@@ -139,10 +143,178 @@ pub fn mount(
         .SUCCESS => {},
         .NOENT => return Error.UnsupportedFilesystem,
         .NOMEM => return Error.OutOfMemory,
+        .BUSY => return Error.AlreadyMounted,
         else => |err| {
             log.err("failed to mount \"{s}\" on \"{s}\": {s}", .{ special, dir, @tagName(err) });
             return std.posix.unexpectedErrno(err);
         },
+    }
+}
+
+/// `struct mnt_id_req`. The kernel tells versions of this apart by the size the
+/// caller reports, so `size` has to match the fields actually filled in.
+pub const MountIdReq = extern struct {
+    size: u32 = @sizeOf(MountIdReq),
+    spare: u32 = 0,
+    mnt_id: u64,
+    param: u64 = 0,
+    mnt_ns_id: u64 = 0,
+
+    /// Passed as `mnt_id` to list the mounts of the current namespace from its
+    /// root, rather than the children of some particular mount.
+    pub const LSMT_ROOT = C.LSMT_ROOT;
+};
+
+/// What `statmount` should fill in. It writes only what is asked for, and says
+/// in `Statmount.mask` what it managed to produce.
+pub const STATMOUNT = struct {
+    pub const SB_BASIC = C.STATMOUNT_SB_BASIC;
+    pub const MNT_BASIC = C.STATMOUNT_MNT_BASIC;
+    pub const PROPAGATE_FROM = C.STATMOUNT_PROPAGATE_FROM;
+    pub const MNT_ROOT = C.STATMOUNT_MNT_ROOT;
+    pub const MNT_POINT = C.STATMOUNT_MNT_POINT;
+    pub const FS_TYPE = C.STATMOUNT_FS_TYPE;
+    pub const MNT_NS_ID = C.STATMOUNT_MNT_NS_ID;
+    pub const MNT_OPTS = C.STATMOUNT_MNT_OPTS;
+};
+
+/// `struct statmount`. Variable length: the strings that were asked for follow
+/// the fixed part, and the u32 fields naming them are byte offsets into that
+/// trailing area rather than pointers.
+pub const Statmount = extern struct {
+    size: u32,
+    mnt_opts: u32,
+    mask: u64,
+    sb_dev_major: u32,
+    sb_dev_minor: u32,
+    sb_magic: u64,
+    sb_flags: u32,
+    fs_type: u32,
+    mnt_id: u64,
+    mnt_parent_id: u64,
+    mnt_id_old: u32,
+    mnt_parent_id_old: u32,
+    mnt_attr: u64,
+    mnt_propagation: u64,
+    mnt_peer_group: u64,
+    mnt_master: u64,
+    propagate_from: u64,
+    mnt_root: u32,
+    mnt_point: u32,
+    mnt_ns_id: u64,
+    spare2: [49]u64,
+
+    /// The string at `offset` in the trailing area of a buffer this was read
+    /// into. `buf` must be the whole buffer, not just the fixed part.
+    pub fn str(buf: []const u8, offset: u32) ?[:0]const u8 {
+        const start = @sizeOf(Statmount) + offset;
+        if (start >= buf.len) {
+            return null;
+        }
+        const rest = buf[start..];
+        const end = std.mem.indexOfScalar(u8, rest, 0) orelse return null;
+        return rest[0..end :0];
+    }
+};
+
+/// The ids of the mounts directly under `mnt_id`. Returns how many were
+/// written into `ids`.
+pub fn listmount(req: *const MountIdReq, ids: []u64, flags: u32) Error!usize {
+    const rc = system.syscall4(
+        .listmount,
+        @intFromPtr(req),
+        @intFromPtr(ids.ptr),
+        ids.len,
+        flags,
+    );
+
+    switch (system.errno(rc)) {
+        .SUCCESS => return rc,
+        .NOENT => return Error.FileNotFound,
+        .NOMEM => return Error.OutOfMemory,
+        .PERM => return Error.PermissionDenied,
+        .INVAL => return Error.InvalidArguments,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+/// Fill `buf` with a `Statmount` for one mount, followed by whatever strings
+/// `req.param` asked for.
+pub fn statmount(req: *const MountIdReq, buf: []u8, flags: u32) Error!void {
+    const rc = system.syscall4(
+        .statmount,
+        @intFromPtr(req),
+        @intFromPtr(buf.ptr),
+        buf.len,
+        flags,
+    );
+
+    switch (system.errno(rc)) {
+        .SUCCESS => {},
+        .NOENT => return Error.FileNotFound,
+        .NOMEM => return Error.OutOfMemory,
+        .PERM => return Error.PermissionDenied,
+        .INVAL => return Error.InvalidArguments,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+/// `struct mount_attr`. As with `MountIdReq`, the kernel tells versions apart
+/// by the size the caller reports.
+pub const MountAttr = extern struct {
+    attr_set: u64 = 0,
+    attr_clr: u64 = 0,
+    propagation: u64 = 0,
+    userns_fd: u64 = 0,
+};
+
+/// Apply mount attributes to an existing mount, which is the only way to get
+/// them onto one that was cloned rather than created: a clone has no `fsmount`
+/// to carry them.
+pub fn mountSetattr(
+    dir_fd: posix.fd_t,
+    path: [*:0]const u8,
+    flags: usize,
+    attr: *const MountAttr,
+) Error!void {
+    switch (system.errno(system.syscall5(
+        .mount_setattr,
+        @bitCast(@as(isize, dir_fd)),
+        @intFromPtr(path),
+        flags,
+        @intFromPtr(attr),
+        @sizeOf(MountAttr),
+    ))) {
+        .SUCCESS => {},
+        .NOENT => return Error.FileNotFound,
+        .INVAL => return Error.InvalidArguments,
+        .PERM => return Error.PermissionDenied,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+/// `FS_IMMUTABLE_FL`: a file carrying this cannot be written to, renamed or
+/// removed by anyone, root included, until it is taken back off.
+const FS_IMMUTABLE_FL: c_long = 0x10;
+
+const FS_IOC_SETFLAGS = system.IOCTL.IOW('f', 2, c_long);
+
+/// Make a file immutable.
+///
+/// Not every filesystem answers this. tmpfs, which is what a mixos root is,
+/// only does so when the kernel was built with CONFIG_TMPFS_XATTR -- asked for
+/// in <mixos/module.nix> alongside TMPFS itself.
+pub fn setImmutable(fd: posix.fd_t) Error!void {
+    // Set rather than read-modify-write: this is for a file whose flags are
+    // known, having just been created, so there is nothing to preserve.
+    var flags: c_long = FS_IMMUTABLE_FL;
+
+    switch (system.errno(system.ioctl(fd, FS_IOC_SETFLAGS, @intFromPtr(&flags)))) {
+        .SUCCESS => {},
+        // The filesystem has no file attributes, or none it will take this in.
+        .NOTTY, .OPNOTSUPP => return Error.UnsupportedFilesystem,
+        .PERM => return Error.PermissionDenied,
+        else => |err| return posix.unexpectedErrno(err),
     }
 }
 
@@ -160,6 +332,7 @@ pub fn pivotRoot(new: [:0]const u8, put_old: [:0]const u8) Error!void {
 pub fn umount(path: [:0]const u8, flags: u32) Error!void {
     switch (system.errno(system.umount2(path, flags))) {
         .SUCCESS => {},
+        .BUSY => return Error.DeviceBusy,
         .INVAL => return Error.InvalidArguments,
         .NOMEM => return Error.OutOfMemory,
         else => |err| return posix.unexpectedErrno(err),
@@ -222,6 +395,15 @@ pub fn loopbackSetFD(loopback_device: posix.fd_t, handle: posix.fd_t) !void {
         .SUCCESS => {},
         .BADF => unreachable,
         .INVAL => return error.InvalidBackingFile,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn loopbackClearFD(loopback_device: posix.fd_t) Error!void {
+    switch (system.errno(system.ioctl(loopback_device, C.LOOP_CLR_FD, 0))) {
+        .SUCCESS => {},
+        .BUSY => return Error.DeviceBusy,
+        .NXIO => return Error.DeviceNotBound,
         else => |err| return posix.unexpectedErrno(err),
     }
 }

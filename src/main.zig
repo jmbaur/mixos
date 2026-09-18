@@ -7,10 +7,12 @@ pub const std_options: std.Options = .{
 };
 
 const commands = struct {
-    pub const init = @import("init.zig");
+    pub const @"switch-root" = @import("switch-root.zig");
     pub const @"test-backdoor" = @import("test-backdoor.zig");
     pub const @"test-network" = @import("test-network.zig");
+    pub const init = @import("init.zig");
     pub const modprobe = @import("modprobe.zig");
+    pub const shutdown = @import("shutdown.zig");
 };
 
 pub fn main(init: std.process.Init) !void {

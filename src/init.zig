@@ -41,7 +41,7 @@ const StateConfig = struct {
     options: []const []const u8,
 };
 
-const Manifest = struct {
+pub const Manifest = struct {
     /// The PID1 of the post-initrd system.
     init: []const u8,
 
@@ -112,6 +112,16 @@ fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd: posix
     return loop_device_path;
 }
 
+/// Where the nix store for a system comes from.
+pub const StoreSource = union(enum) {
+    /// A block device holding an erofs image, which is what the initrd carries.
+    erofs: []const u8,
+
+    /// An already-mounted tree, opened before a pivot so that it survives one.
+    /// This is how a store that lives on another machine arrives.
+    tree: *Mount,
+};
+
 fn mountStore(
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -132,14 +142,28 @@ fn mountStore(
     );
 }
 
+// Fixed path for new systems to switch to with pivot_root().
+pub const sysroot = "/sysroot";
+
+const sysroot_relative = sysroot[1..];
+
+// Fixed path where a system keeps the manifest it was brought up from, so that
+// it can be brought up from the same one again. In the root, since that is what
+// "mixos shutdown" leaves standing for the restart action that reads it.
+pub const manifest_path = "/.manifest.json";
+
+// Where persistent state lives.
+pub const state_path = "/state";
+pub const state_bind_mounts = [_][:0]const u8{ "var", "root", "home" };
+
 /// Returns a handle to the new root directory.
-fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
-    try root_dir.createDirPath(io, "sysroot");
+pub fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
+    try root_dir.createDirPath(io, sysroot_relative);
 
     var tmpfs = try Mount.init("tmpfs");
-    try tmpfs.finish(root_dir, "sysroot", Mount.Options.NODEV | Mount.Options.NOSUID);
+    try tmpfs.finish(root_dir, sysroot_relative, Mount.Options.NODEV | Mount.Options.NOSUID);
 
-    var sysroot_dir = try root_dir.openDir(io, "sysroot", .{});
+    var sysroot_dir = try root_dir.openDir(io, sysroot_relative, .{});
     defer sysroot_dir.close(io);
 
     // Create directories that do not yet exist
@@ -157,19 +181,30 @@ fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     try linux.umount(".", system.MNT.DETACH);
 }
 
-fn setupRoot(
+pub fn setupRoot(
     io: std.Io,
     allocator: std.mem.Allocator,
     root_dir: std.Io.Dir,
     manifest: *const Manifest,
-    store_blockdev: []const u8,
+    store: StoreSource,
 ) !void {
     // Create directories that do not yet exist
     inline for (&.{ "usr", "etc", "run", "tmp", "var", "root", "home" }) |path| {
         try root_dir.createDirPath(io, path);
     }
 
-    try mountStore(io, allocator, store_blockdev, std.Io.Dir.cwd(), manifest.storeDir);
+    switch (store) {
+        .erofs => |blockdev| try mountStore(io, allocator, blockdev, std.Io.Dir.cwd(), manifest.storeDir),
+        .tree => |tree| {
+            const store_dir_relative = std.mem.trimStart(u8, manifest.storeDir, std.fs.path.sep_str);
+            try std.Io.Dir.cwd().createDirPath(io, store_dir_relative);
+            try tree.finish(
+                std.Io.Dir.cwd(),
+                try allocator.dupeZ(u8, store_dir_relative),
+                Mount.Options.RDONLY | Mount.Options.NODEV | Mount.Options.NOSUID,
+            );
+        },
+    }
 
     var usr = try Mount.initTree(std.Io.Dir.cwd(), manifest.usr);
     try usr.finish(root_dir, "usr", 0);
@@ -319,12 +354,9 @@ const max_device_module_passes = 8;
 
 /// Load the modules for the devices the kernel has already found.
 ///
-/// The kernel does not use request_module() to bind a driver to a device: it
-/// announces the device with a uevent carrying a MODALIAS and leaves the
-/// loading to userspace. Every device the kernel registers before mdev is
-/// listening would go without its driver, so ask the devices themselves what
-/// they need. Devices that turn up later are covered by the $MODALIAS rule in
-/// mdev.conf.
+/// Every device the kernel registers before mdev is listening would go without
+/// its driver, so ask the devices themselves what they need. Devices that turn
+/// up later are covered by the $MODALIAS rule in mdev.conf.
 fn loadDeviceModules(io: std.Io, allocator: std.mem.Allocator) !void {
     if (std.Io.Dir.cwd().access(io, "/proc/modules", .{})) {} else |_| {
         // kernel not built with modules support
@@ -538,16 +570,23 @@ fn initState(
         };
     }
 
-    try std.Io.Dir.cwd().createDirPath(io, "/state");
-    try state_mount.finish(std.Io.Dir.cwd(), "/state", 0);
+    try std.Io.Dir.cwd().createDirPath(io, state_path);
+    state_mount.finish(std.Io.Dir.cwd(), state_path, 0) catch |err| {
+        log.err("failed to mount state from {s}: {}", .{ state.source, err });
+        return err;
+    };
 }
 
 fn setupState(io: std.Io, root_dir: std.Io.Dir, lower_etc: []const u8) !void {
-    var state_dir = try root_dir.createDirPathOpen(io, "state", .{});
+    var state_dir = try root_dir.createDirPathOpen(
+        io,
+        std.mem.trimStart(u8, state_path, std.fs.path.sep_str),
+        .{},
+    );
     defer state_dir.close(io);
 
     // Ensure /var, /root, and /home persists data back to /state
-    inline for (&.{ "var", "root", "home" }) |dir_name| {
+    inline for (state_bind_mounts) |dir_name| {
         b: {
             state_dir.createDirPath(io, dir_name) catch |err| {
                 log.err("failed to create /state/{s} mount source: {}", .{ dir_name, err });
@@ -792,13 +831,17 @@ fn setupSystem(
     // We create this memfd object as early as possible, mostly so we get the
     // vanity of having a low file descriptor number.
     //
-    // NOTE: We don't close the store_fd, since that would deallocate the memfd
-    const store_fd = try linux.memfdCreate("store", system.MFD.ALLOW_SEALING);
+    // CLOEXEC because this descriptor is ours and no one else's: PID1 exec's
+    // the real init at the end of all this, and anything holding the store open
+    // across that would keep the whole image in memory and show up in every
+    // /proc/<pid>/fd in the system.
+    const store_fd = try linux.memfdCreate("store", system.MFD.ALLOW_SEALING | system.MFD.CLOEXEC);
 
     const allocator = init.arena.allocator();
 
     var manifest: Manifest = undefined;
-    var store_blockdev: []const u8 = undefined;
+    var manifest_contents: []const u8 = undefined;
+    var store: StoreSource = undefined;
 
     // pre switch-root
     {
@@ -819,12 +862,12 @@ fn setupSystem(
         // mounted until right before this.
         kmsg.init(init.io);
 
-        const manifest_json = try root_dir.openFile(init.io, "manifest.json", .{});
+        const manifest_json = try root_dir.openFile(init.io, ".manifest.json", .{});
         defer manifest_json.close(init.io);
 
         var manifest_json_reader = manifest_json.reader(init.io, &.{});
-        const manifest_json_contents = try manifest_json_reader.interface.allocRemaining(allocator, .unlimited);
-        const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_json_contents, .{});
+        manifest_contents = try manifest_json_reader.interface.allocRemaining(allocator, .unlimited);
+        const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_contents, .{});
 
         manifest = manifest_.value;
 
@@ -838,17 +881,61 @@ fn setupSystem(
             };
         }
 
-        store_blockdev = try createStoreLoopback(init.io, allocator, store_fd, manifest.storeFS);
+        store = .{ .erofs = try createStoreLoopback(init.io, allocator, store_fd, manifest.storeFS) };
+
+        // The loopback device took its own reference to the memfd, so ours has
+        // done its job. Letting it go now means the image is held by exactly
+        // one thing, which is what makes it possible to ever give it back.
+        _ = system.close(store_fd);
 
         try switchRoot(init.io, root_dir);
     }
 
+    return try bringUp(init, allocator, stage2_init_allocator, &manifest, manifest_contents, store);
+}
+
+/// Bring up the system described by `manifest` inside the root we have just
+/// pivoted into, and return the init to hand control to.
+///
+/// Everything here is equally true of the system the initrd unpacks and of one
+/// switched into later from somewhere else, so both paths share it: the only
+/// thing that differs between them is where the store came from.
+pub fn bringUp(
+    init: std.process.Init,
+    allocator: std.mem.Allocator,
+    stage2_init_allocator: std.mem.Allocator,
+    manifest: *const Manifest,
+    manifest_json: []const u8,
+    store: StoreSource,
+) ![:0]const u8 {
     var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
     defer root_dir.close(init.io);
 
-    defer kmsg.deinit(init.io);
+    // Left where whatever brings this system up next can find it, and left
+    // immutable rather than merely read-only, since everything here runs as
+    // root and root is exactly who a mode does not stop. Reading it back is
+    // unaffected, which is all anything wants it for. Not fatal: all that is
+    // lost is the ability to restart without being told again what this system
+    // is.
+    if (root_dir.createFile(init.io, manifest_path[1..], .{
+        .permissions = .fromMode(0o444),
+    })) |manifest_file| {
+        defer manifest_file.close(init.io);
 
-    try setupRoot(init.io, allocator, root_dir, &manifest, store_blockdev);
+        if (manifest_file.writeStreamingAll(init.io, manifest_json)) {
+            // Through the descriptor we just wrote with: there is nothing to
+            // reopen, and nothing in between for the file to be anything else.
+            linux.setImmutable(manifest_file.handle) catch |err| {
+                log.warn("could not make {s} immutable: {}", .{ manifest_path, err });
+            };
+        } else |err| {
+            log.err("failed to record the manifest at {s}: {}", .{ manifest_path, err });
+        }
+    } else |err| {
+        log.err("failed to record the manifest at {s}: {}", .{ manifest_path, err });
+    }
+
+    try setupRoot(init.io, allocator, root_dir, manifest, store);
 
     mountPseudoFilesystems(init.io);
 
@@ -926,6 +1013,7 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
         while (true) std.Options.debug_io.futexWaitUncancelable(u32, &futex, 0);
         unreachable;
     };
+    kmsg.deinit();
     init.arena.deinit();
 
     const argv_buf = try fba.allocator().allocSentinel(?[*:0]const u8, 1, null);
@@ -937,6 +1025,6 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
         argv_buf.ptr,
         std.process.Environ.empty.block.slice,
     ));
-    log.err("execv PID1 failed: {}", .{err});
+    log.err("execve PID1 failed: {}", .{err});
     @panic("PANIC");
 }

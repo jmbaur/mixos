@@ -14,6 +14,10 @@ var io_: ?std.Io = null;
 var kmsg_buffer: [PRINTKRB_RECORD_MAX]u8 = undefined;
 
 pub fn init(io: std.Io) void {
+    if (kmsg != null) {
+        return;
+    }
+
     // disable kmsg rate limit
     if (std.Io.Dir.cwd().openFile(
         io,
@@ -38,12 +42,15 @@ pub fn init(io: std.Io) void {
     log.setLogger(.kmsg);
 }
 
-pub fn deinit(io: std.Io) void {
+pub fn deinit() void {
     if (kmsg) |file| {
-        file.close(io);
+        if (io_) |io| {
+            file.close(io);
+            kmsg = null;
+            io_ = null;
+            log.setLogger(.default);
+        }
     }
-    kmsg = null;
-    log.setLogger(.default);
 }
 
 pub fn logFn(

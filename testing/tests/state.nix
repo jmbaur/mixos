@@ -4,10 +4,7 @@ _: {
   mixos.nodes.machine = { pkgs, ... }: {
     testing.qemu.diskImage = 1024 * 1024 * 1024;
 
-    boot.kernelModules = [
-      "virtio_blk"
-      "ext4"
-    ];
+    boot.kernelModules = [ "ext4" ];
 
     state = {
       enable = true;
@@ -32,5 +29,17 @@ _: {
     machine.connected = False
     machine.connect()
     machine.succeed("test -e /state/hi")
+
+    with subtest("userspace restart handles state"):
+        machine.succeed("touch /state/restarted")
+        machine.execute("kill -QUIT 1", check_output=False)
+
+        machine.wait_for_console_text("executing init")
+        machine.connected = False
+        machine.connect()
+
+        machine.succeed("mount | grep '/dev/vda on /state type ext2'")
+        machine.succeed("test -e /state/hi")
+        machine.succeed("test -e /state/restarted")
   '';
 }
