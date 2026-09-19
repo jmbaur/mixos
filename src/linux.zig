@@ -20,17 +20,24 @@ pub fn setHostname(hostname: []const u8) !void {
 }
 
 pub const Error = error{
-    AlreadyMounted,
     DeviceBusy,
     DeviceNotBound,
+    DeviceNotFound,
     FileNotFound,
     FilesystemFdUsed,
+    Interrupted,
     InvalidArguments,
     InvalidMountpoint,
+    NameTooLong,
     NoChildProcess,
+    NoLoopDeviceAvailable,
+    NotABlockDevice,
     NotADirectory,
     OutOfMemory,
     PermissionDenied,
+    ReadOnlyFileSystem,
+    SymLinkLoop,
+    SystemResources,
     UnsupportedFilesystem,
 } || posix.UnexpectedError;
 
@@ -139,12 +146,21 @@ pub fn mount(
     flags: u32,
     data: usize,
 ) Error!void {
-    // TODO(jared): enumerate all possible errors
     switch (system.errno(system.mount(special, dir, fstype, flags, data))) {
         .SUCCESS => {},
-        .NOENT => return Error.UnsupportedFilesystem,
+        .ACCES, .PERM => return Error.PermissionDenied,
+        .BUSY => return Error.DeviceBusy,
+        .FAULT, .INVAL => return Error.InvalidArguments,
+        .LOOP => return Error.SymLinkLoop,
+        .MFILE, .NOSPC => return Error.SystemResources,
+        .NAMETOOLONG => return Error.NameTooLong,
+        .NODEV => return Error.UnsupportedFilesystem,
+        .NOENT => return Error.FileNotFound,
         .NOMEM => return Error.OutOfMemory,
-        .BUSY => return Error.AlreadyMounted,
+        .NOTBLK => return Error.NotABlockDevice,
+        .NOTDIR => return Error.NotADirectory,
+        .NXIO => return Error.DeviceNotFound,
+        .ROFS => return Error.ReadOnlyFileSystem,
         else => |err| {
             log.err("failed to mount \"{s}\" on \"{s}\": {s}", .{ special, dir, @tagName(err) });
             return std.posix.unexpectedErrno(err);
@@ -324,10 +340,66 @@ pub fn pidfdOpen(pid: posix.pid_t, flags: u32) !posix.fd_t {
             .NFILE => error.SystemFdQuotaExceeded,
             .NOMEM => error.OutOfMemory,
             .SRCH => error.ProcessNotFound,
+            // Kernel older than 5.3.
+            .NOSYS => error.OperationUnsupported,
             else => |err| posix.unexpectedErrno(err),
         };
     } else {
         return @intCast(ret);
+    }
+}
+
+pub fn epollCreate1(flags: u32) !posix.fd_t {
+    const ret = system.epoll_create1(flags);
+    switch (system.errno(ret)) {
+        .SUCCESS => return @intCast(ret),
+        .INVAL => return error.InvalidArguments,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        .NOMEM => return error.OutOfMemory,
+        // Kernel built without CONFIG_EPOLL.
+        .NOSYS => return error.OperationUnsupported,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn epollCtl(epfd: posix.fd_t, op: u32, fd: posix.fd_t, event: ?*system.epoll_event) !void {
+    switch (system.errno(system.epoll_ctl(epfd, op, fd, event))) {
+        .SUCCESS => {},
+        .BADF, .INVAL => return error.InvalidArguments,
+        .EXIST => return error.FileDescriptorAlreadyPresentInSet,
+        .LOOP => return error.OperationCausesCircularLoop,
+        .NOENT => return error.FileDescriptorNotRegistered,
+        .NOMEM => return error.OutOfMemory,
+        .NOSPC => return error.UserResourceLimitReached,
+        .PERM => return error.FileDescriptorIncompatibleWithEpoll,
+        .NOSYS => return error.OperationUnsupported,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn timerfdCreate(clockid: system.timerfd_clockid_t, flags: system.TFD) !posix.fd_t {
+    const ret = system.timerfd_create(clockid, flags);
+    switch (system.errno(ret)) {
+        .SUCCESS => return @intCast(ret),
+        .INVAL => return error.InvalidArguments,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        .NODEV, .NOMEM => return error.SystemResources,
+        // Kernel built without CONFIG_TIMERFD.
+        .NOSYS => return error.OperationUnsupported,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn pipe2(flags: system.O) ![2]posix.fd_t {
+    var fds: [2]posix.fd_t = undefined;
+    switch (system.errno(system.pipe2(&fds, flags))) {
+        .SUCCESS => return fds,
+        .FAULT, .INVAL => return error.InvalidArguments,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        else => |err| return posix.unexpectedErrno(err),
     }
 }
 
@@ -361,9 +433,13 @@ pub fn loopbackGetFree(io: std.Io) !usize {
 
     const loop_nr = system.ioctl(loop_control.handle, C.LOOP_CTL_GET_FREE, 0);
 
-    // TODO(jared): enumerate all possible errors
     switch (system.errno(loop_nr)) {
         .SUCCESS => return loop_nr,
+        .BADF, .NOTTY => return Error.InvalidArguments,
+        // Only for a fatal signal, so there is no point in trying again.
+        .INTR => return Error.Interrupted,
+        .NOMEM => return Error.OutOfMemory,
+        .NOSPC => return Error.NoLoopDeviceAvailable,
         else => |err| return posix.unexpectedErrno(err),
     }
 }

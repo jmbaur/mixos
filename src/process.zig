@@ -191,37 +191,30 @@ pub fn run(
         timeout: ?i64 = null,
     },
 ) !std.process.Child.Term {
-    const epoll: posix.fd_t = @intCast(posix.system.epoll_create1(C.EPOLL_CLOEXEC));
+    const epoll = try linux.epollCreate1(C.EPOLL_CLOEXEC);
     defer _ = posix.system.close(epoll);
 
     const dev_null = try std.Io.Dir.cwd().openFile(io, "/dev/null", .{});
     defer dev_null.close(io);
 
-    var stdout_pipe = std.mem.zeroes([2]posix.fd_t);
-    _ = posix.system.pipe(&stdout_pipe);
+    const stdout_pipe = try linux.pipe2(.{});
     defer _ = posix.system.close(stdout_pipe[0]);
 
-    var stderr_pipe: ?[2]posix.fd_t = std.mem.zeroes([2]posix.fd_t);
-    if (opts.stdout_writer != opts.stderr_writer) {
-        _ = posix.system.pipe(&stderr_pipe.?);
-    } else {
-        stderr_pipe = null;
-    }
+    const stderr_pipe: ?[2]posix.fd_t = if (opts.stdout_writer != opts.stderr_writer)
+        try linux.pipe2(.{})
+    else
+        null;
     defer {
         if (stderr_pipe) |pipe| _ = posix.system.close(pipe[0]);
     }
 
-    var err_pipe = std.mem.zeroes([2]posix.fd_t);
-    _ = posix.system.pipe(&err_pipe);
+    const err_pipe = try linux.pipe2(.{});
     defer {
         _ = posix.system.close(err_pipe[0]);
         _ = posix.system.close(err_pipe[1]);
     }
 
-    const timerfd: posix.fd_t = @intCast(posix.system.timerfd_create(
-        .BOOTTIME,
-        @bitCast(posix.system.TFD{ .CLOEXEC = true }),
-    ));
+    const timerfd = try linux.timerfdCreate(.BOOTTIME, .{ .CLOEXEC = true });
     defer _ = posix.system.close(timerfd);
 
     switch (posix.system.fork()) {
@@ -238,7 +231,7 @@ pub fn run(
             const pidfd = try linux.pidfdOpen(@intCast(pid), 0);
             defer _ = posix.system.close(pidfd);
 
-            _ = posix.system.epoll_ctl(
+            try linux.epollCtl(
                 epoll,
                 EPOLL.CTL_ADD,
                 pidfd,
@@ -248,7 +241,7 @@ pub fn run(
                 }),
             );
 
-            _ = posix.system.epoll_ctl(
+            try linux.epollCtl(
                 epoll,
                 EPOLL.CTL_ADD,
                 err_pipe[0],
@@ -258,7 +251,7 @@ pub fn run(
                 }),
             );
 
-            _ = posix.system.epoll_ctl(
+            try linux.epollCtl(
                 epoll,
                 EPOLL.CTL_ADD,
                 stdout_pipe[0],
@@ -269,7 +262,7 @@ pub fn run(
             );
 
             if (stderr_pipe) |pipe| {
-                _ = posix.system.epoll_ctl(
+                try linux.epollCtl(
                     epoll,
                     EPOLL.CTL_ADD,
                     pipe[0],
@@ -287,7 +280,7 @@ pub fn run(
                     &.{ .it_value = .{ .sec = @intCast(seconds), .nsec = 0 }, .it_interval = .{ .sec = 0, .nsec = 0 } },
                     null,
                 );
-                _ = posix.system.epoll_ctl(
+                try linux.epollCtl(
                     epoll,
                     EPOLL.CTL_ADD,
                     timerfd,
@@ -356,7 +349,6 @@ test run {
     {
         var output: std.Io.Writer.Discarding = .init(&.{});
 
-        // TODO(jared): skip test if any kernel features we use here aren't available (EPOLL/TIMERFD/etc)
         try std.testing.expectError(error.Timeout, run(
             std.testing.io,
             .{ .argv = &.{ "sleep", "2" } },
@@ -370,6 +362,9 @@ test run {
             // external command, we should allow for locked-down/sandboxed
             // environments that do not have the capability to run this test.
             error.FileNotFound => return error.SkipZigTest,
+            // The kernel lacks something run() is built on, e.g. a kernel
+            // configured without CONFIG_EPOLL or CONFIG_TIMERFD.
+            error.OperationUnsupported => return error.SkipZigTest,
             else => err,
         });
     }
