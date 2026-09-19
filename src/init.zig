@@ -223,6 +223,45 @@ pub fn setupRoot(
     }
 }
 
+/// Kernel parameter asking for the running mixos to stand in for the one in the
+/// store, mostly helpful for debugging.
+const self_override_param = "mixos.self_override";
+
+fn selfOverrideRequested(io: std.Io) bool {
+    var buf: [4096]u8 = undefined;
+
+    const cmdline = std.Io.Dir.cwd().openFile(io, "/proc/cmdline", .{}) catch return false;
+    defer cmdline.close(io);
+
+    var cmdline_reader = cmdline.reader(io, &buf);
+
+    while (cmdline_reader.interface.takeDelimiter(' ') catch return false) |entry| {
+        if (std.mem.eql(u8, std.mem.trimEnd(u8, entry, "\n"), self_override_param)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+fn overrideStoreMixos(io: std.Io, arena_alloc: std.mem.Allocator, root_dir: std.Io.Dir) !void {
+    const target = try root_dir.realPathFileAlloc(io, "usr/bin/mixos", arena_alloc);
+
+    // We must copy first rather than a bind of /proc/self/exe, since that may
+    // live in the initrd's rootfs.
+    const copy_name = ".mixos-self-override";
+    try std.Io.Dir.cwd().copyFile("/proc/self/exe", root_dir, copy_name, io, .{
+        .permissions = .fromMode(0o555),
+        .replace = true,
+    });
+    defer root_dir.deleteFile(io, copy_name) catch {};
+
+    var self_mount = try Mount.initTree(root_dir, copy_name);
+    try self_mount.finish(std.Io.Dir.cwd(), try arena_alloc.dupeZ(u8, target), Mount.Options.RDONLY);
+
+    log.info("swapped {s} with current mixos executable", .{target});
+}
+
 /// By the point this runs, we already have /sys, /dev, and /proc mounted.
 fn mountPseudoFilesystems(io: std.Io) void {
     b: {
@@ -891,15 +930,18 @@ fn setupSystem(
         try switchRoot(init.io, root_dir);
     }
 
-    return try bringUp(init, allocator, stage2_init_allocator, &manifest, manifest_contents, store);
+    return try bringUp(
+        init,
+        allocator,
+        stage2_init_allocator,
+        &manifest,
+        manifest_contents,
+        store,
+    );
 }
 
 /// Bring up the system described by `manifest` inside the root we have just
 /// pivoted into, and return the init to hand control to.
-///
-/// Everything here is equally true of the system the initrd unpacks and of one
-/// switched into later from somewhere else, so both paths share it: the only
-/// thing that differs between them is where the store came from.
 pub fn bringUp(
     init: std.process.Init,
     allocator: std.mem.Allocator,
@@ -908,6 +950,8 @@ pub fn bringUp(
     manifest_json: []const u8,
     store: StoreSource,
 ) ![:0]const u8 {
+    const override_self = selfOverrideRequested(init.io);
+
     var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
     defer root_dir.close(init.io);
 
@@ -936,6 +980,12 @@ pub fn bringUp(
     }
 
     try setupRoot(init.io, allocator, root_dir, manifest, store);
+
+    if (override_self) {
+        overrideStoreMixos(init.io, allocator, root_dir) catch |err| {
+            log.err("failed to override store mixos executable: {}", .{err});
+        };
+    }
 
     mountPseudoFilesystems(init.io);
 

@@ -20,12 +20,15 @@ const params = clap.parseParamsComptime(
 
 const parsers = .{ .manifest = clap.parsers.string };
 
-fn loopDeviceBackingSelf() ?u32 {
+fn loopDeviceBackingPath(path: []const u8) ?u32 {
     var stx: system.Statx = undefined;
+
+    var pathZ = std.mem.zeroes([std.fs.max_path_bytes]u8);
+    std.mem.copyForwards(u8, &pathZ, path);
 
     if (system.errno(system.statx(
         system.AT.FDCWD,
-        "/proc/self/exe",
+        pathZ[0..path.len :0],
         0,
         .{},
         &stx,
@@ -62,8 +65,6 @@ fn blockDeviceName(io: std.Io, out: []u8, major: u32, minor: u32) ?[]const u8 {
     return out[0..name.len];
 }
 
-/// Ensures the loopback device that is setup during early boot is released
-/// from memory, since it is no longer being accessed.
 fn releaseLoopDevice(io: std.Io, minor: u32) void {
     var name_buf: [std.fs.max_name_bytes]u8 = undefined;
     const name = blockDeviceName(io, &name_buf, linux.LOOP_MAJOR, minor) orelse {
@@ -167,7 +168,7 @@ pub fn main(
 
     // Ensure we know which loop device we might need to release after
     // switching, to ensure we can clean up resources from the first system.
-    const old_loop_device = if (staged == null) null else loopDeviceBackingSelf();
+    const old_loop_device = if (staged == null) null else loopDeviceBackingPath(manifest.storeDir);
 
     log.info("switching to {s}", .{if (staged == null) "/" else init_mod.sysroot});
 
@@ -186,6 +187,8 @@ pub fn main(
     );
 
     if (old_loop_device) |minor| {
+        // Ensures the loopback device that is setup during early boot is
+        // released from memory, since it is no longer being accessed.
         releaseLoopDevice(init.io, minor);
     }
 

@@ -120,6 +120,7 @@ pub fn main(init: std.process.Init) !void {
 
     var cmdline: std.ArrayList(u8) = .empty;
     try cmdline.appendSlice(arena_alloc, "debug");
+    try cmdline.appendSlice(arena_alloc, " mixos.self_override");
     if (builtin.target.cpu.arch == .x86_64) {
         try cmdline.appendSlice(arena_alloc, " console=ttyS0,115200");
     }

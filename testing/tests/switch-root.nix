@@ -22,6 +22,7 @@ in
 
   testScript = ''
     with subtest("first system"):
+        assert "/dev/loop1" == machine.succeed("losetup -f").strip()
         machine.fail("hello")
         machine.succeed("mkdir -p /sysroot && mount -t erofs -o ro /dev/vda /sysroot")
         machine.execute("kill -QUIT 1", check_output=False)
@@ -48,13 +49,8 @@ in
         machine.connected = False
         machine.connect()
 
-        # Still the same system, and a new one: the root it is on was built
-        # from scratch rather than left as the shutdown took it apart.
         machine.succeed("hello")
         machine.fail("test -e /run/before-restart")
-
-        # /etc is a mount the shutdown takes down, so it is only here again
-        # because the system was brought all the way back up.
         machine.succeed("test -e /etc/inittab")
   '';
 }
