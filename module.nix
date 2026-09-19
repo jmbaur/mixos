@@ -69,6 +69,8 @@ let
       cp -r $output_path store/
     done
 
+    install -Dm0444 ${config.system.build.manifest} store/.manifest.json
+
     erofs_zip=
     if kconfig ${kernelPackage.configfile} --assert-yes EROFS_FS_ZIP_LZMA 2>/dev/null; then
       erofs_zip="-zlzma"
@@ -911,7 +913,6 @@ in
             "RD_XZ"
             "TIMERFD"
             "TMPFS"
-            "TMPFS_XATTR"
           ]
           ++ optional (config.boot.firmware != [ ]) "FW_LOADER_COMPRESS_XZ"
         ) (const kernel.yes))
@@ -963,7 +964,6 @@ in
         inherit (builtins) storeDir;
         inherit (config.system.build) usr etc;
         init = getExe' pkgs.busybox "init";
-        storeFS = "/mixos.erofs";
         boot = {
           inherit (config.boot) kernelModules;
           watchdog = if config.boot.watchdog.enable then { } else null;
@@ -975,10 +975,8 @@ in
         );
       };
 
-      # Can be used with "mixos switch-root", along with config.system.build.manifest
-      #
-      # TODO(jared): Perhaps find a way to ship the manifest and erofs image
-      # together, or move to DDIs?
+      # Can be used with "mixos switch-root" by mounting it at /run/nextstore.
+      # The image carries its own manifest at /.manifest.json.
       system.build.erofs = pkgs.callPackage (
         {
           erofs-utils,
@@ -1121,12 +1119,8 @@ in
                 ${config.system.build.kernelModules}/lib/modules/${kernelPackage.modDirVersion}/modules.* \
                 initrd/lib/modules/${kernelPackage.modDirVersion}
 
-              ${buildStoreErofs "mixos.erofs"}
-
               install -Dm0755 ${getExe config.mixos.package} initrd/init
-
-              install -Dm0644 ${config.system.build.manifest} initrd/.manifest.json
-              install -Dm0644 mixos.erofs initrd/mixos.erofs
+              ${buildStoreErofs "initrd/mixos.erofs"}
               (cd initrd && find . -print0 | sort -z | cpio --quiet -o -H newc -R +0:+0 --reproducible --null | eval -- xz --check=crc32 --lzma2=dict=512KiB >> "$out/initrd")
             '';
           }

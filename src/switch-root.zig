@@ -13,12 +13,68 @@ const kmsg = @import("kmsg.zig");
 
 const params = clap.parseParamsComptime(
     \\-h, --help  Display this help and exit.
-    \\<manifest>  The new system's manifest, as a path within /sysroot. Left
-    \\            out, the running system is brought up again.
     \\
 );
 
-const parsers = .{ .manifest = clap.parsers.string };
+const next_store = "/run/nextstore";
+
+fn mountOf(path: [*:0]const u8) ?u64 {
+    var stx: system.Statx = undefined;
+
+    if (system.errno(system.statx(
+        system.AT.FDCWD,
+        path,
+        0,
+        .{ .MNT_ID_UNIQUE = true },
+        &stx,
+    )) != .SUCCESS) {
+        return null;
+    }
+
+    return stx.mnt_id;
+}
+
+// TODO(jared): use STATX_ATTR_MOUNT_ROOT when we have https://codeberg.org/ziglang/zig/pulls/36882
+fn isMountpoint(comptime path: [:0]const u8) bool {
+    const mount = mountOf(path) orelse return false;
+    const parent = mountOf(path ++ "/..") orelse return false;
+    return mount != parent;
+}
+
+fn loadManifest(allocator: std.mem.Allocator, contents: []const u8) !init_mod.Manifest {
+    const parsed = try std.json.parseFromSlice(init_mod.Manifest, allocator, contents, .{});
+    return parsed.value;
+}
+
+/// The manifest in the next store
+fn stagedManifest(io: std.Io, allocator: std.mem.Allocator) ?init_mod.Manifest {
+    if (!isMountpoint(next_store)) {
+        return null;
+    }
+
+    var store_dir = std.Io.Dir.cwd().openDir(io, next_store, .{}) catch |err| {
+        log.warn("cannot open {s}: {}", .{ next_store, err });
+        return null;
+    };
+    defer store_dir.close(io);
+
+    const manifest_file = store_dir.openFile(io, init_mod.manifest_path[1..], .{}) catch |err| {
+        log.warn("no manifest at {s} under {s}: {}", .{ init_mod.manifest_path, next_store, err });
+        return null;
+    };
+    defer manifest_file.close(io);
+
+    var manifest_reader = manifest_file.reader(io, &.{});
+    const contents = manifest_reader.interface.allocRemaining(allocator, .unlimited) catch |err| {
+        log.warn("cannot read the manifest under {s}: {}", .{ next_store, err });
+        return null;
+    };
+
+    return loadManifest(allocator, contents) catch |err| {
+        log.warn("invalid manifest under {s}: {}", .{ next_store, err });
+        return null;
+    };
+}
 
 fn loopDeviceBackingPath(path: []const u8) ?u32 {
     var stx: system.Statx = undefined;
@@ -106,7 +162,7 @@ pub fn main(
     const allocator = init.arena.allocator();
 
     var diag: clap.Diagnostic = .{};
-    var res = clap.parseEx(clap.Help, &params, parsers, args, .{
+    var res = clap.parseEx(clap.Help, &params, clap.parsers.default, args, .{
         .diagnostic = &diag,
         .allocator = allocator,
     }) catch |err| {
@@ -124,34 +180,21 @@ pub fn main(
         @panic("PANIC");
     }
 
-    const staged = res.positionals[0];
+    const staged = stagedManifest(init.io, allocator);
 
-    const from = if (staged == null) "/" else init_mod.sysroot;
-    const manifest_relative = std.mem.trimStart(
-        u8,
-        staged orelse init_mod.manifest_path,
-        std.fs.path.sep_str,
-    );
-
-    const manifest_contents = b: {
-        var from_dir = std.Io.Dir.cwd().openDir(init.io, from, .{}) catch |err| {
-            log.err("cannot open '{s}', where the system to bring up lives: {}", .{ from, err });
-            return err;
-        };
-        defer from_dir.close(init.io);
-
-        const manifest_file = from_dir.openFile(init.io, manifest_relative, .{}) catch |err| {
-            log.err("cannot read the manifest '{s}' under '{s}': {}", .{ manifest_relative, from, err });
+    const manifest = staged orelse b: {
+        const manifest_file = std.Io.Dir.cwd().openFile(init.io, init_mod.active_manifest_path, .{}) catch |err| {
+            log.err("cannot read the running system's manifest '{s}': {}", .{ init_mod.active_manifest_path, err });
             return err;
         };
         defer manifest_file.close(init.io);
 
         var manifest_reader = manifest_file.reader(init.io, &.{});
-        break :b try manifest_reader.interface.allocRemaining(allocator, .unlimited);
+        break :b try loadManifest(
+            allocator,
+            try manifest_reader.interface.allocRemaining(allocator, .unlimited),
+        );
     };
-
-    const parsed = try std.json.parseFromSlice(init_mod.Manifest, allocator, manifest_contents, .{});
-    const manifest = parsed.value;
 
     // Take a handle on the store before pivoting. The old root is detached on
     // the way out, so anything we still need afterwards has to be held open
@@ -160,7 +203,7 @@ pub fn main(
     // from, which is held open across the pivot the same way.
     var store = try Mount.initTree(
         std.Io.Dir.cwd(),
-        if (staged == null) manifest.storeDir else init_mod.sysroot,
+        if (staged == null) manifest.storeDir else next_store,
     );
 
     var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
@@ -170,7 +213,7 @@ pub fn main(
     // switching, to ensure we can clean up resources from the first system.
     const old_loop_device = if (staged == null) null else loopDeviceBackingPath(manifest.storeDir);
 
-    log.info("switching to {s}", .{if (staged == null) "/" else init_mod.sysroot});
+    log.info("switching to {s}", .{if (staged == null) "/" else next_store});
 
     try init_mod.switchRoot(init.io, root_dir);
 
@@ -182,8 +225,7 @@ pub fn main(
         allocator,
         stage2_fba.allocator(),
         &manifest,
-        manifest_contents,
-        .{ .tree = &store },
+        &store,
     );
 
     if (old_loop_device) |minor| {

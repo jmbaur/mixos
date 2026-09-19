@@ -1,7 +1,6 @@
 { config, ... }:
 let
   target = config.mixos.nodes.target;
-  targetManifest = baseNameOf target.system.build.manifest;
 in
 {
   name = "mixos-switch-root";
@@ -11,11 +10,6 @@ in
       "-drive"
       "file=${target.system.build.erofs},if=virtio,format=raw,readonly=on"
     ];
-
-    init.restart = {
-      tty = "console";
-      process = "/bin/mixos switch-root ${targetManifest}";
-    };
   };
 
   mixos.nodes.target = { pkgs, ... }: { packages = [ pkgs.hello ]; };
@@ -24,10 +18,12 @@ in
     with subtest("first system"):
         assert "/dev/loop1" == machine.succeed("losetup -f").strip()
         machine.fail("hello")
-        machine.succeed("mkdir -p /sysroot && mount -t erofs -o ro /dev/vda /sysroot")
+        machine.succeed("mkdir -p /run/nextstore && mount -t erofs -o ro /dev/vda /run/nextstore")
+        machine.succeed("test -f /run/nextstore/.manifest.json")
         machine.execute("kill -QUIT 1", check_output=False)
 
     with subtest("second system"):
+        machine.wait_for_console_text("switching to the system staged at /run/nextstore")
         machine.wait_for_console_text("executing init")
         machine.connected = False
         machine.connect()
@@ -35,22 +31,31 @@ in
         assert "/dev/loop0" == machine.succeed("losetup -f").strip()
 
     with subtest("restart with nothing staged"):
-        machine.fail("test -e /sysroot")
-        machine.succeed("test -f /.manifest.json")
+        machine.fail("test -e /run/nextstore")
+        assert "/nix/store/.manifest.json" == machine.succeed("readlink /run/mixos/manifest.json").strip()
 
-        # Immutable, so not even root gets to rewrite what this system is.
-        machine.fail("echo >/.manifest.json")
-        machine.fail("rm -f /.manifest.json")
+        machine.fail("echo >/run/mixos/manifest.json")
 
         machine.succeed("touch /run/before-restart")
         machine.execute("kill -QUIT 1", check_output=False)
 
-        machine.wait_for_console_text("switching to /sysroot")
+        machine.wait_for_console_text("bringing up the running system again")
         machine.connected = False
         machine.connect()
 
         machine.succeed("hello")
         machine.fail("test -e /run/before-restart")
         machine.succeed("test -e /etc/inittab")
+
+    with subtest("restart with a store lacking a manifest"):
+        machine.succeed("mkdir -p /run/nextstore && mount -t tmpfs none /run/nextstore")
+        machine.execute("kill -QUIT 1", check_output=False)
+
+        machine.wait_for_console_text("no manifest at /.manifest.json under /run/nextstore")
+        machine.wait_for_console_text("bringing up the running system again")
+        machine.connected = False
+        machine.connect()
+
+        machine.succeed("hello")
   '';
 }

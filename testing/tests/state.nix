@@ -25,7 +25,7 @@ _: {
     machine.succeed("test -b /dev/vda")
     machine.succeed("mount | grep '/dev/vda on /state type ext2'")
     machine.succeed("touch /state/hi")
-    machine.succeed("reboot")
+    machine.execute("reboot", check_output=False)
     machine.connected = False
     machine.connect()
     machine.succeed("test -e /state/hi")

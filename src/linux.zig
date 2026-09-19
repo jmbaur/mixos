@@ -294,31 +294,6 @@ pub fn mountSetattr(
     }
 }
 
-/// `FS_IMMUTABLE_FL`: a file carrying this cannot be written to, renamed or
-/// removed by anyone, root included, until it is taken back off.
-const FS_IMMUTABLE_FL: c_long = 0x10;
-
-const FS_IOC_SETFLAGS = system.IOCTL.IOW('f', 2, c_long);
-
-/// Make a file immutable.
-///
-/// Not every filesystem answers this. tmpfs, which is what a mixos root is,
-/// only does so when the kernel was built with CONFIG_TMPFS_XATTR -- asked for
-/// in <mixos/module.nix> alongside TMPFS itself.
-pub fn setImmutable(fd: posix.fd_t) Error!void {
-    // Set rather than read-modify-write: this is for a file whose flags are
-    // known, having just been created, so there is nothing to preserve.
-    var flags: c_long = FS_IMMUTABLE_FL;
-
-    switch (system.errno(system.ioctl(fd, FS_IOC_SETFLAGS, @intFromPtr(&flags)))) {
-        .SUCCESS => {},
-        // The filesystem has no file attributes, or none it will take this in.
-        .NOTTY, .OPNOTSUPP => return Error.UnsupportedFilesystem,
-        .PERM => return Error.PermissionDenied,
-        else => |err| return posix.unexpectedErrno(err),
-    }
-}
-
 pub fn pivotRoot(new: [:0]const u8, put_old: [:0]const u8) Error!void {
     switch (system.errno(system.pivot_root(new, put_old))) {
         .SUCCESS => {},

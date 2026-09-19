@@ -48,9 +48,6 @@ pub const Manifest = struct {
     /// The nix store dir (most likely /nix/store).
     storeDir: []const u8,
 
-    /// The location of the store filesystem (must be erofs).
-    storeFS: []const u8,
-
     /// The path to the /usr hierarchy in the store.
     usr: []const u8,
 
@@ -112,51 +109,19 @@ fn createStoreLoopback(io: std.Io, allocator: std.mem.Allocator, store_fd: posix
     return loop_device_path;
 }
 
-/// Where the nix store for a system comes from.
-pub const StoreSource = union(enum) {
-    /// A block device holding an erofs image, which is what the initrd carries.
-    erofs: []const u8,
-
-    /// An already-mounted tree, opened before a pivot so that it survives one.
-    /// This is how a store that lives on another machine arrives.
-    tree: *Mount,
-};
-
-fn mountStore(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    store_blockdev: []const u8,
-    mount_dir: std.Io.Dir,
-    store_dir: []const u8,
-) !void {
-    const store_dir_relative = std.mem.trimStart(u8, store_dir, std.fs.path.sep_str);
-    try mount_dir.createDirPath(io, store_dir_relative);
-
-    var store = try Mount.init("erofs");
-    try store.setSource(store_blockdev);
-    try store.setOption("ro", null);
-    try store.finish(
-        mount_dir,
-        try allocator.dupeZ(u8, store_dir_relative),
-        Mount.Options.RDONLY | Mount.Options.NODEV | Mount.Options.NOSUID,
-    );
-}
-
-// Fixed path for new systems to switch to with pivot_root().
 pub const sysroot = "/sysroot";
 
 const sysroot_relative = sysroot[1..];
 
-// Fixed path where a system keeps the manifest it was brought up from, so that
-// it can be brought up from the same one again. In the root, since that is what
-// "mixos shutdown" leaves standing for the restart action that reads it.
+const store_image_path = "/mixos.erofs";
+
 pub const manifest_path = "/.manifest.json";
 
-// Where persistent state lives.
+pub const active_manifest_path = "/run/mixos/manifest.json";
+
 pub const state_path = "/state";
 pub const state_bind_mounts = [_][:0]const u8{ "var", "root", "home" };
 
-/// Returns a handle to the new root directory.
 pub fn switchRoot(io: std.Io, root_dir: std.Io.Dir) !void {
     try root_dir.createDirPath(io, sysroot_relative);
 
@@ -186,25 +151,20 @@ pub fn setupRoot(
     allocator: std.mem.Allocator,
     root_dir: std.Io.Dir,
     manifest: *const Manifest,
-    store: StoreSource,
+    store: *Mount,
 ) !void {
     // Create directories that do not yet exist
     inline for (&.{ "usr", "etc", "run", "tmp", "var", "root", "home" }) |path| {
         try root_dir.createDirPath(io, path);
     }
 
-    switch (store) {
-        .erofs => |blockdev| try mountStore(io, allocator, blockdev, std.Io.Dir.cwd(), manifest.storeDir),
-        .tree => |tree| {
-            const store_dir_relative = std.mem.trimStart(u8, manifest.storeDir, std.fs.path.sep_str);
-            try std.Io.Dir.cwd().createDirPath(io, store_dir_relative);
-            try tree.finish(
-                std.Io.Dir.cwd(),
-                try allocator.dupeZ(u8, store_dir_relative),
-                Mount.Options.RDONLY | Mount.Options.NODEV | Mount.Options.NOSUID,
-            );
-        },
-    }
+    const store_dir_relative = std.mem.trimStart(u8, manifest.storeDir, std.fs.path.sep_str);
+    try std.Io.Dir.cwd().createDirPath(io, store_dir_relative);
+    try store.finish(
+        std.Io.Dir.cwd(),
+        try allocator.dupeZ(u8, store_dir_relative),
+        Mount.Options.RDONLY | Mount.Options.NODEV | Mount.Options.NOSUID,
+    );
 
     var usr = try Mount.initTree(std.Io.Dir.cwd(), manifest.usr);
     try usr.finish(root_dir, "usr", 0);
@@ -879,8 +839,7 @@ fn setupSystem(
     const allocator = init.arena.allocator();
 
     var manifest: Manifest = undefined;
-    var manifest_contents: []const u8 = undefined;
-    var store: StoreSource = undefined;
+    var store: Mount = undefined;
 
     // pre switch-root
     {
@@ -901,15 +860,6 @@ fn setupSystem(
         // mounted until right before this.
         kmsg.init(init.io);
 
-        const manifest_json = try root_dir.openFile(init.io, ".manifest.json", .{});
-        defer manifest_json.close(init.io);
-
-        var manifest_json_reader = manifest_json.reader(init.io, &.{});
-        manifest_contents = try manifest_json_reader.interface.allocRemaining(allocator, .unlimited);
-        const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_contents, .{});
-
-        manifest = manifest_.value;
-
         var kmod = try Kmod.init(.{});
         defer kmod.deinit();
 
@@ -920,12 +870,28 @@ fn setupSystem(
             };
         }
 
-        store = .{ .erofs = try createStoreLoopback(init.io, allocator, store_fd, manifest.storeFS) };
+        const store_blockdev = try createStoreLoopback(init.io, allocator, store_fd, store_image_path);
 
         // The loopback device took its own reference to the memfd, so ours has
         // done its job. Letting it go now means the image is held by exactly
         // one thing, which is what makes it possible to ever give it back.
         _ = system.close(store_fd);
+
+        var store_fs = try Mount.init("erofs");
+        try store_fs.setSource(store_blockdev);
+        try store_fs.setOption("ro", null);
+        store = try store_fs.detach(0);
+
+        // Since we detach the store mount above, we can access the
+        // manifest inside of it.
+        const manifest_json = try store.root().openFile(init.io, manifest_path[1..], .{});
+        defer manifest_json.close(init.io);
+
+        var manifest_json_reader = manifest_json.reader(init.io, &.{});
+        const manifest_contents = try manifest_json_reader.interface.allocRemaining(allocator, .unlimited);
+        const manifest_ = try std.json.parseFromSlice(Manifest, allocator, manifest_contents, .{});
+
+        manifest = manifest_.value;
 
         try switchRoot(init.io, root_dir);
     }
@@ -935,51 +901,44 @@ fn setupSystem(
         allocator,
         stage2_init_allocator,
         &manifest,
-        manifest_contents,
-        store,
+        &store,
     );
 }
 
-/// Bring up the system described by `manifest` inside the root we have just
-/// pivoted into, and return the init to hand control to.
+fn linkManifest(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    root_dir: std.Io.Dir,
+    manifest: *const Manifest,
+) !void {
+    const link = active_manifest_path[1..];
+    try root_dir.createDirPath(io, std.fs.path.dirname(link).?);
+
+    const target = try std.fs.path.join(allocator, &.{ manifest.storeDir, manifest_path });
+    defer allocator.free(target);
+
+    try root_dir.symLink(io, target, link, .{});
+}
+
+/// Bring up the system described by the store's manifest, returning the init
+/// (PID1) we will pass control to.
 pub fn bringUp(
     init: std.process.Init,
     allocator: std.mem.Allocator,
     stage2_init_allocator: std.mem.Allocator,
     manifest: *const Manifest,
-    manifest_json: []const u8,
-    store: StoreSource,
+    store: *Mount,
 ) ![:0]const u8 {
     const override_self = selfOverrideRequested(init.io);
 
     var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
     defer root_dir.close(init.io);
 
-    // Left where whatever brings this system up next can find it, and left
-    // immutable rather than merely read-only, since everything here runs as
-    // root and root is exactly who a mode does not stop. Reading it back is
-    // unaffected, which is all anything wants it for. Not fatal: all that is
-    // lost is the ability to restart without being told again what this system
-    // is.
-    if (root_dir.createFile(init.io, manifest_path[1..], .{
-        .permissions = .fromMode(0o444),
-    })) |manifest_file| {
-        defer manifest_file.close(init.io);
-
-        if (manifest_file.writeStreamingAll(init.io, manifest_json)) {
-            // Through the descriptor we just wrote with: there is nothing to
-            // reopen, and nothing in between for the file to be anything else.
-            linux.setImmutable(manifest_file.handle) catch |err| {
-                log.warn("could not make {s} immutable: {}", .{ manifest_path, err });
-            };
-        } else |err| {
-            log.err("failed to record the manifest at {s}: {}", .{ manifest_path, err });
-        }
-    } else |err| {
-        log.err("failed to record the manifest at {s}: {}", .{ manifest_path, err });
-    }
-
     try setupRoot(init.io, allocator, root_dir, manifest, store);
+
+    linkManifest(init.io, allocator, root_dir, manifest) catch |err| {
+        log.err("failed to link {s}: {}", .{ active_manifest_path, err });
+    };
 
     if (override_self) {
         overrideStoreMixos(init.io, allocator, root_dir) catch |err| {
