@@ -15,7 +15,10 @@ const C = @cImport({
 
 const log = std.log.scoped(.mixos);
 
-const WatchdogConfig = struct {};
+const WatchdogConfig = struct {
+    /// Seconds without progress during boot before the machine is reset.
+    timeout: u32,
+};
 
 const BootConfig = struct {
     kernelModules: []const []const u8,
@@ -308,34 +311,19 @@ fn premountEtc(lower_etc: []const u8) !void {
     try etc.finish(std.Io.Dir.cwd(), "/etc", 0);
 }
 
+/// The kmod context for loading modules from the system's own module tree, or
+/// null when the kernel was built without module support.
+fn initKmod(io: std.Io) ?Kmod {
+    std.Io.Dir.cwd().access(io, "/proc/modules", .{}) catch return null;
+
+    return Kmod.init(io, .{ .set_modprobe_path = true }) catch |err| {
+        log.err("failed to initialize kmod: {}", .{err});
+        return null;
+    };
+}
+
 /// Load all kernel modules declared in the MixOS configuration.
-fn loadModules(io: std.Io, boot: *const BootConfig) !void {
-    if (std.Io.Dir.cwd().access(io, "/proc/modules", .{})) {} else |_| {
-        // kernel not built with modules support
-        return;
-    }
-
-    if (std.Io.Dir.cwd().openFile(
-        io,
-        "/proc/sys/kernel/modprobe",
-        .{ .mode = .write_only },
-    )) |modprobe| {
-        defer modprobe.close(io);
-        const modprobe_path = "/sbin/modprobe\n";
-        var writer = modprobe.writer(io, &.{});
-        writer.interface.writeAll(modprobe_path) catch {};
-        writer.interface.flush() catch {};
-    } else |err| {
-        log.err("failed to set modprobe path: {}", .{err});
-    }
-
-    if (boot.kernelModules.len == 0) {
-        return;
-    }
-
-    var kmod = try Kmod.init(.{});
-    defer kmod.deinit();
-
+fn loadModules(kmod: *Kmod, boot: *const BootConfig) void {
     for (boot.kernelModules) |module| {
         kmod.modprobe(module) catch |err| switch (err) {
             error.ModulesNotAvailable => break,
@@ -356,17 +344,9 @@ const max_device_module_passes = 8;
 /// Every device the kernel registers before mdev is listening would go without
 /// its driver, so ask the devices themselves what they need. Devices that turn
 /// up later are covered by the $MODALIAS rule in mdev.conf.
-fn loadDeviceModules(io: std.Io, allocator: std.mem.Allocator) !void {
-    if (std.Io.Dir.cwd().access(io, "/proc/modules", .{})) {} else |_| {
-        // kernel not built with modules support
-        return;
-    }
-
+fn loadDeviceModules(io: std.Io, allocator: std.mem.Allocator, kmod: *Kmod) !void {
     var devices = try std.Io.Dir.cwd().openDir(io, "/sys/devices", .{ .iterate = true });
     defer devices.close(io);
-
-    var kmod = try Kmod.init(.{});
-    defer kmod.deinit();
 
     // Loading a module registers new devices, since a controller brings up the
     // bus below it, and those come with modaliases of their own. Keep going
@@ -505,6 +485,8 @@ fn initState(
     environ_map: *std.process.Environ.Map,
     allocator: std.mem.Allocator,
     state: *const StateConfig,
+    /// Seconds `state.init` gets to finish, if it is limited.
+    init_timeout: ?u32,
 ) !void {
     b: {
         if (state.init) |init| {
@@ -527,6 +509,7 @@ fn initState(
                 .{
                     .stdout_writer = &output.writer,
                     .stderr_writer = &output.writer,
+                    .timeout = if (init_timeout) |timeout| timeout else null,
                 },
             ) catch |err| {
                 log.err("failed to run state initialization: {}", .{err});
@@ -814,10 +797,8 @@ fn setupNetworking() !void {
     };
 }
 
-fn setupWatchdog(io: std.Io, watchdog: *const WatchdogConfig) !?Watchdog {
-    _ = watchdog;
-
-    return Watchdog.init(io) catch |err| switch (err) {
+fn setupWatchdog(io: std.Io, config: *const WatchdogConfig) !?Watchdog {
+    return Watchdog.init(io, config.timeout) catch |err| switch (err) {
         error.FileNotFound => return null,
         else => return err,
     };
@@ -860,7 +841,7 @@ fn setupSystem(
         // mounted until right before this.
         kmsg.init(init.io);
 
-        var kmod = try Kmod.init(.{});
+        var kmod = try Kmod.init(init.io, .{});
         defer kmod.deinit();
 
         for ([_][]const u8{ "loop", "overlay", "erofs" }) |module_query| {
@@ -952,34 +933,45 @@ pub fn bringUp(
         log.err("failed to pre-mount /etc: {}", .{err});
     };
 
-    loadModules(init.io, &manifest.boot) catch |err| {
-        log.err("failed to load modules: {}", .{err});
-    };
+    // After /etc is up, since kmod reads its configuration from there.
+    var kmod = initKmod(init.io);
+    defer if (kmod) |*k| k.deinit();
 
-    // We prepare the watchdog right after loading modules, just in
-    // case the list of modules the user wants to load includes any
-    // module(s) for the watchdog.
-    //
-    // TODO(jared): We should just spawn off a thread that continually tries
-    // for the duration of the setup.
+    if (kmod) |*k| loadModules(k, &manifest.boot);
+
+    // We prepare the watchdog right after loading modules, just in case the
+    // list of modules the user wants to load includes any module(s) for the
+    // watchdog.
     var watchdog = if (manifest.boot.watchdog) |*w| try setupWatchdog(init.io, w) else null;
     errdefer if (watchdog) |*w| w.deinit(init.io, .{ .disarm = false });
 
     // Runs after the watchdog is armed, since walking every device the kernel
     // found and loading what it asks for can take a while.
-    loadDeviceModules(init.io, allocator) catch |err| {
+    if (kmod) |*k| loadDeviceModules(init.io, allocator, k) catch |err| {
         log.err("failed to load device modules: {}", .{err});
     };
+    if (watchdog) |*w| w.ping();
 
     mdevScan(init.io, allocator) catch |err| {
         log.err("failed to run mdev: {}", .{err});
     };
+    if (watchdog) |*w| w.ping();
 
-    if (manifest.state) |state| try initState(init.io, init.environ_map, allocator, &state);
+    if (manifest.state) |state| {
+        // Set a timeout for state initialization to be a little bit less than
+        // the watchdog timeout, that way we can show the user a friendly
+        // message rather than just resetting the box.
+        const init_timeout = if (manifest.boot.watchdog) |w| w.timeout - 5 else null;
+
+        try initState(init.io, init.environ_map, allocator, &state, init_timeout);
+        if (watchdog) |*w| w.ping();
+    }
 
     try setupState(init.io, root_dir, manifest.etc);
+    if (watchdog) |*w| w.ping();
 
     try setupServices(init.io, allocator, manifest.services);
+    if (watchdog) |*w| w.ping();
 
     setupHostname(init.io, allocator) catch |err| {
         log.err("failed to set hostname: {}", .{err});

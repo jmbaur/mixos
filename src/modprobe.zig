@@ -35,7 +35,7 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
         return clap.helpToFile(init.io, .stdout(), clap.Help, &params, .{});
     }
 
-    var kmod = try Kmod.init(.{});
+    var kmod = try Kmod.init(init.io, .{});
     defer kmod.deinit();
 
     for (res.positionals[0]) |module| {

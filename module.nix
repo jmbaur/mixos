@@ -380,13 +380,25 @@ in
         };
       };
 
-      watchdog.enable = mkOption {
-        type = types.bool;
-        default = true;
-        description = ''
-          Enable watchdog integration. This ensures if the boot process fails,
-          the system doesn't hang indefinitely.
-        '';
+      watchdog = {
+        enable = mkOption {
+          type = types.bool;
+          default = true;
+          description = ''
+            Enable watchdog integration. This ensures if the boot process
+            fails, the system doesn't hang indefinitely.
+          '';
+        };
+
+        timeout = mkOption {
+          type = types.addCheck types.ints.positive (timeout: timeout >= 10) // {
+            description = "integer of at least 10";
+          };
+          default = 90;
+          description = ''
+            Watchdog timeout.
+          '';
+        };
       };
     };
 
@@ -966,7 +978,8 @@ in
         init = getExe' pkgs.busybox "init";
         boot = {
           inherit (config.boot) kernelModules;
-          watchdog = if config.boot.watchdog.enable then { } else null;
+          watchdog =
+            if config.boot.watchdog.enable then { inherit (config.boot.watchdog) timeout; } else null;
         };
         graphics = if config.hardware.graphics.enable then { drivers = graphicsDrivers; } else null;
         state = if config.state.enable then removeAttrs config.state [ "enable" ] else null;

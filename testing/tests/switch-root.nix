@@ -23,8 +23,8 @@ in
         machine.execute("kill -QUIT 1", check_output=False)
 
     with subtest("second system"):
-        machine.wait_for_console_text("switching to the system staged at /run/nextstore")
-        machine.wait_for_console_text("executing init")
+        machine.wait_for_console_text("switching to /run/nextstore", timeout=60)
+        machine.wait_for_console_text("executing init", timeout=60)
         machine.connected = False
         machine.connect()
         machine.succeed("hello")
@@ -39,7 +39,7 @@ in
         machine.succeed("touch /run/before-restart")
         machine.execute("kill -QUIT 1", check_output=False)
 
-        machine.wait_for_console_text("bringing up the running system again")
+        machine.wait_for_console_text(r"switching to /(?!\S)", timeout=60)
         machine.connected = False
         machine.connect()
 
@@ -51,8 +51,8 @@ in
         machine.succeed("mkdir -p /run/nextstore && mount -t tmpfs none /run/nextstore")
         machine.execute("kill -QUIT 1", check_output=False)
 
-        machine.wait_for_console_text("no manifest at /.manifest.json under /run/nextstore")
-        machine.wait_for_console_text("bringing up the running system again")
+        machine.wait_for_console_text("no manifest at /.manifest.json under /run/nextstore", timeout=60)
+        machine.wait_for_console_text(r"switching to /(?!\S)", timeout=60)
         machine.connected = False
         machine.connect()
 

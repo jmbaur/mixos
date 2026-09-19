@@ -50,7 +50,18 @@ fn kmodLog(
     }
 }
 
-pub fn init(opts: struct { root: ?[]const u8 = null }) !Kmod {
+/// What the kernel runs to load modules it wants, e.g. for a new device.
+const modprobe_path = "/sbin/modprobe";
+
+pub fn init(io: std.Io, opts: struct {
+    root: ?[]const u8 = null,
+    /// Point the kernel at our modprobe for loading modules itself. Only for
+    /// the context that owns module loading on the running system, since it
+    /// changes a system-wide setting.
+    set_modprobe_path: bool = false,
+}) !Kmod {
+    if (opts.set_modprobe_path) setModprobePath(io);
+
     const kmod_ctx = (if (opts.root) |path| b: {
         var root = std.mem.zeroes([std.fs.max_path_bytes]u8);
         std.mem.copyForwards(u8, &root, path);
@@ -68,6 +79,23 @@ pub fn init(opts: struct { root: ?[]const u8 = null }) !Kmod {
 
     return .{
         .ctx = kmod_ctx,
+    };
+}
+
+fn setModprobePath(io: std.Io) void {
+    const sysctl = std.Io.Dir.cwd().openFile(
+        io,
+        "/proc/sys/kernel/modprobe",
+        .{ .mode = .write_only },
+    ) catch |err| {
+        log.err("failed to set modprobe path: {}", .{err});
+        return;
+    };
+    defer sysctl.close(io);
+
+    var writer = sysctl.writer(io, &.{});
+    writer.interface.writeAll(modprobe_path ++ "\n") catch |err| {
+        log.err("failed to set modprobe path: {}", .{err});
     };
 }
 

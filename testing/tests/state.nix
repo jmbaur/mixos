@@ -20,6 +20,24 @@ _: {
     };
   };
 
+  # Only started by its own subtest, since it never finishes booting.
+  mixos.nodes.stuck = { lib, pkgs, ... }: {
+    boot.watchdog.enable = true;
+    boot.watchdog.timeout = 10; # so the reset comes quickly
+    boot.requiredKernelConfig.I6300ESB_WDT = lib.kernel.module;
+    boot.kernelModules = [ "i6300esb" ];
+
+    state = {
+      enable = true;
+      source = "none";
+      fsType = "tmpfs";
+      init = pkgs.writeScript "never-finishes.sh" ''
+        #!/bin/sh
+        sleep infinity
+      '';
+    };
+  };
+
   testScript = ''
     machine.start(allow_reboot=True)
     machine.succeed("test -b /dev/vda")
@@ -41,5 +59,10 @@ _: {
         machine.succeed("mount | grep '/dev/vda on /state type ext2'")
         machine.succeed("test -e /state/hi")
         machine.succeed("test -e /state/restarted")
+
+    with subtest("state initialization times out"):
+        stuck.start()
+        stuck.wait_for_console_text("failed to run state initialization: error.Timeout", timeout=60)
+        stuck.wait_for_shutdown() # the watchdog goes off once boot has failed
   '';
 }

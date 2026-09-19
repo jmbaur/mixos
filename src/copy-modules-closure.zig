@@ -43,7 +43,7 @@ pub fn main(init: std.process.Init) !void {
         return error.InvalidArguments;
     };
 
-    var kmod = try Kmod.init(.{ .root = module_root });
+    var kmod = try Kmod.init(init.io, .{ .root = module_root });
     defer kmod.deinit();
 
     var module_root_dir = try std.Io.Dir.cwd().openDir(init.io, module_root, .{});

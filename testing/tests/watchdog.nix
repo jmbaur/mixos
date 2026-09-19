@@ -3,6 +3,7 @@ _: {
 
   mixos.nodes.machine = { lib, pkgs, ... }: {
     boot.watchdog.enable = true;
+    boot.watchdog.timeout = 10; # so the reset comes quickly
     boot.requiredKernelConfig.I6300ESB_WDT = lib.kernel.module;
     boot.kernelModules = [ "i6300esb" ];
 

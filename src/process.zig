@@ -36,6 +36,9 @@ fn runChild(
 
         io.vtable.processSetCurrentDir(io.userdata, cwd) catch |err| break :child err;
 
+        // Allows for killing the entire process group.
+        _ = posix.system.setpgid(0, 0);
+
         _ = posix.system.dup2(stdin, posix.STDIN_FILENO);
         _ = posix.system.dup2(stdout, posix.STDOUT_FILENO);
         _ = posix.system.dup2(stderr, posix.STDERR_FILENO);
@@ -58,6 +61,12 @@ fn handlePid(args: CallbackArgs) anyerror!?std.process.Child.Term {
     _ = posix.system.epoll_ctl(args.epoll, EPOLL.CTL_DEL, args.pidfd, null);
 
     args.state.process_complete = true;
+
+    // Whatever it started may still hold on to its output, which would keep us
+    // waiting for the end of it forever, so after a timeout it goes too.
+    if (args.state.process_timeout) {
+        linux.pidfdSendSignal(args.pidfd, posix.SIG.KILL, linux.PIDFD_SIGNAL.PROCESS_GROUP) catch {};
+    }
 
     // We can close the stdout/stderr pipes on the writer's end, which will
     // cause EPOLLHUP, thus allowing us to capture the rest of the process'
@@ -150,7 +159,17 @@ fn handleTimer(args: CallbackArgs) anyerror!?std.process.Child.Term {
 
     _ = posix.system.epoll_ctl(args.epoll, EPOLL.CTL_DEL, args.timerfd, null);
 
-    try linux.pidfdSendSignal(args.pidfd, posix.SIG.TERM);
+    // The whole group, since the process may have started others that hold on
+    // to its output. If it has already exited, only those are left, and they
+    // get no say in it: handlePid() will not be around to finish them off.
+    linux.pidfdSendSignal(
+        args.pidfd,
+        if (args.state.process_complete) posix.SIG.KILL else posix.SIG.TERM,
+        linux.PIDFD_SIGNAL.PROCESS_GROUP,
+    ) catch |err| switch (err) {
+        error.ProcessNotFound => {},
+        else => return err,
+    };
 
     args.state.process_timeout = true;
 
@@ -228,6 +247,8 @@ pub fn run(
             replace_opts,
         ),
         else => |pid| {
+            _ = posix.system.setpgid(@intCast(pid), @intCast(pid));
+
             const pidfd = try linux.pidfdOpen(@intCast(pid), 0);
             defer _ = posix.system.close(pidfd);
 
@@ -303,12 +324,11 @@ pub fn run(
                     if (state.process_complete) {
                         return if (state.process_timeout) error.Timeout else ret;
                     } else {
-                        try linux.pidfdSendSignal(pidfd, posix.SIG.KILL);
+                        try linux.pidfdSendSignal(pidfd, posix.SIG.KILL, 0);
                     }
                 }
 
-                const num_events = posix.system.epoll_wait(epoll, &events, events.len, -1);
-                for (events[0..@intCast(num_events)]) |event| {
+                for (try linux.epollWait(epoll, &events, -1)) |event| {
                     const func: *const fn (CallbackArgs) anyerror!?std.process.Child.Term = @ptrFromInt(event.data.ptr);
 
                     if (func(.{
@@ -364,6 +384,26 @@ test run {
             error.FileNotFound => return error.SkipZigTest,
             // The kernel lacks something run() is built on, e.g. a kernel
             // configured without CONFIG_EPOLL or CONFIG_TIMERFD.
+            error.OperationUnsupported => return error.SkipZigTest,
+            else => err,
+        });
+    }
+
+    // timeout, with a child left behind that holds on to the output
+    {
+        var output: std.Io.Writer.Discarding = .init(&.{});
+
+        try std.testing.expectError(error.Timeout, run(
+            std.testing.io,
+            // "; true" keeps sh from exec'ing sleep in its place.
+            .{ .argv = &.{ "sh", "-c", "sleep 60; true" } },
+            .{
+                .stdout_writer = &output.writer,
+                .stderr_writer = &output.writer,
+                .timeout = 1,
+            },
+        ) catch |err| switch (err) {
+            error.FileNotFound => return error.SkipZigTest,
             error.OperationUnsupported => return error.SkipZigTest,
             else => err,
         });

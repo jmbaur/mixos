@@ -10,6 +10,12 @@ const C = @cImport({
     @cInclude("linux/watchdog.h");
 });
 
+// Separate from the import above, since the kernel's <linux/fcntl.h> that this
+// brings in clashes with libc's <fcntl.h>.
+const pidfd_h = @cImport({
+    @cInclude("linux/pidfd.h");
+});
+
 const log = std.log.scoped(.mixos);
 
 pub fn setHostname(hostname: []const u8) !void {
@@ -378,6 +384,18 @@ pub fn epollCtl(epfd: posix.fd_t, op: u32, fd: posix.fd_t, event: ?*system.epoll
     }
 }
 
+pub fn epollWait(epfd: posix.fd_t, events: []system.epoll_event, timeout: i32) ![]system.epoll_event {
+    while (true) {
+        const ret = system.epoll_wait(epfd, events.ptr, @intCast(events.len), timeout);
+        switch (system.errno(ret)) {
+            .SUCCESS => return events[0..ret],
+            .INTR => continue,
+            .BADF, .FAULT, .INVAL => return error.InvalidArguments,
+            else => |err| return posix.unexpectedErrno(err),
+        }
+    }
+}
+
 pub fn timerfdCreate(clockid: system.timerfd_clockid_t, flags: system.TFD) !posix.fd_t {
     const ret = system.timerfd_create(clockid, flags);
     switch (system.errno(ret)) {
@@ -387,6 +405,19 @@ pub fn timerfdCreate(clockid: system.timerfd_clockid_t, flags: system.TFD) !posi
         .NFILE => return error.SystemFdQuotaExceeded,
         .NODEV, .NOMEM => return error.SystemResources,
         // Kernel built without CONFIG_TIMERFD.
+        .NOSYS => return error.OperationUnsupported,
+        else => |err| return posix.unexpectedErrno(err),
+    }
+}
+
+pub fn eventfd(initval: u32, flags: u32) !posix.fd_t {
+    const ret = system.eventfd(initval, flags);
+    switch (system.errno(ret)) {
+        .SUCCESS => return @intCast(ret),
+        .INVAL => return error.InvalidArguments,
+        .MFILE => return error.ProcessFdQuotaExceeded,
+        .NFILE => return error.SystemFdQuotaExceeded,
+        .NODEV, .NOMEM => return error.SystemResources,
         .NOSYS => return error.OperationUnsupported,
         else => |err| return posix.unexpectedErrno(err),
     }
@@ -403,8 +434,18 @@ pub fn pipe2(flags: system.O) ![2]posix.fd_t {
     }
 }
 
-pub fn pidfdSendSignal(pidfd: posix.fd_t, signal: posix.SIG) !void {
-    switch (std.os.linux.errno(std.os.linux.pidfd_send_signal(pidfd, signal, null, 0))) {
+pub const PIDFD_SIGNAL = struct {
+    /// The thread the pidfd refers to.
+    pub const THREAD = pidfd_h.PIDFD_SIGNAL_THREAD;
+    /// The whole process the pidfd refers to.
+    pub const THREAD_GROUP = pidfd_h.PIDFD_SIGNAL_THREAD_GROUP;
+    /// Every process in the process group led by the process the pidfd refers
+    /// to, even once that process is gone.
+    pub const PROCESS_GROUP = pidfd_h.PIDFD_SIGNAL_PROCESS_GROUP;
+};
+
+pub fn pidfdSendSignal(pidfd: posix.fd_t, signal: posix.SIG, flags: u32) !void {
+    switch (std.os.linux.errno(std.os.linux.pidfd_send_signal(pidfd, signal, null, flags))) {
         .SUCCESS => {},
         .PERM => return error.PermissionDenied,
         .BADF, .INVAL => return error.InvalidArguments,
@@ -553,6 +594,22 @@ pub const Watchdog = struct {
             else => |err| return posix.unexpectedErrno(err),
         }
         return watchdog_timeout;
+    }
+
+    /// Returns the timeout the driver actually set, which it may round.
+    pub fn setTimeout(self: *@This(), seconds: u32) !u32 {
+        var watchdog_timeout: c_int = @intCast(seconds);
+        switch (system.errno(system.ioctl(
+            self.inner.handle,
+            C.WDIOC_SETTIMEOUT,
+            @intFromPtr(&watchdog_timeout),
+        ))) {
+            .SUCCESS => {},
+            .INVAL => return error.TimeoutOutOfRange,
+            .OPNOTSUPP => return error.OperationUnsupported,
+            else => |err| return posix.unexpectedErrno(err),
+        }
+        return @intCast(watchdog_timeout);
     }
 
     pub fn setOptions(self: *@This(), opts: Options) !void {
