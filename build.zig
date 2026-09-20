@@ -126,6 +126,9 @@ pub fn build(b: *std.Build) void {
     // used by nixpkgs' separateDebugInfo
     b.build_id = .sha1;
 
+    const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
+
     const cpio_dep = b.dependency("cpio", .{});
 
     const clap_dep = b.dependency("clap", .{});
@@ -187,6 +190,7 @@ pub fn build(b: *std.Build) void {
         .strip = false, // let stdenv strip hook do this for us, giving us debug info integration
         .link_libc = true,
     });
+    mixos_module.addOptions("build_options", build_options);
     mixos_module.addImport("clap", clap_dep.module("clap"));
     mixos_module.linkLibrary(libmnl);
     mixos_module.linkLibrary(libkmod);
@@ -232,6 +236,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    unit_tests_module.addOptions("build_options", build_options);
     unit_tests_module.addImport("clap", clap_dep.module("clap"));
     unit_tests_module.linkLibrary(libkmod);
 

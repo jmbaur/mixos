@@ -29,12 +29,19 @@
         removeSuffix
         ;
 
+      # pyproject-nix doesn't work without the version set, and we find it
+      # dynamically at build time based on build.zig.zon content, so we must
+      # set it here.
+      version = import ./version.nix;
+
       pythonProject = inputs.pyproject-nix.lib.project.loadPyproject {
         projectRoot = fileset.toSource {
           root = ./.;
           fileset = fileset.unions [
-            ./pyproject.toml
+            ./build.zig.zon
             ./mixos
+            ./pyproject.toml
+            ./version.py
           ];
         };
       };
@@ -47,7 +54,9 @@
             const (pyfinal: {
               mixos = pyfinal.callPackage (
                 { buildPythonPackage }:
-                buildPythonPackage (pythonProject.renderers.buildPythonPackage { inherit (pyfinal) python; })
+                buildPythonPackage (
+                  pythonProject.renderers.buildPythonPackage { inherit (pyfinal) python; } // { inherit version; }
+                )
               ) { };
             })
           ))
@@ -140,6 +149,9 @@
                     root = "$REPO_ROOT";
                   }
                   // pythonProject.renderers.mkPythonEditablePackage { inherit (pyfinal) python; }
+                  // {
+                    inherit version;
+                  }
                 )
               ) { };
             };

@@ -1,5 +1,6 @@
 from argparse import ArgumentParser, REMAINDER
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version as _package_version
 import logging
 import os
 import socket
@@ -7,6 +8,13 @@ import varlink
 
 
 logger = logging.getLogger(__name__)
+
+try:
+    __version__ = _package_version(__name__)
+except PackageNotFoundError:
+    # Running from a source tree that was never installed, so there is no
+    # distribution metadata to read the version out of.
+    __version__ = "unknown"
 
 
 class Protocol(Enum):
@@ -145,6 +153,12 @@ def cli():
         action="store_true",
         help="Enable verbose logging",
         default=False,
+    )
+    parser.add_argument(
+        "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "-a",

@@ -1,4 +1,5 @@
 const std = @import("std");
+const build_options = @import("build_options");
 const clap = @import("clap");
 
 const params = clap.parseParamsComptime(
@@ -26,7 +27,7 @@ const Connection = varlink.server.Connection(Context, ConnectionData);
 const Context = struct {
     pub const vendor = "jmbaur";
     pub const product = "mixos";
-    pub const version = "1.12.1";
+    pub const version = build_options.version;
     pub const url = "http://mixos.jmbaur.com";
     @"com.jmbaur.mixos": struct {
         pub const interface = mixos_varlink;

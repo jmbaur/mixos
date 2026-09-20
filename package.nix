@@ -9,7 +9,7 @@
 
 stdenvNoCC.mkDerivation (finalAttrs: {
   pname = "mixos";
-  version = "1.12.1";
+  version = import ./version.nix;
 
   src = lib.fileset.toSource {
     root = ./.;

@@ -1,3 +1,4 @@
+const build_options = @import("build_options");
 const clap = @import("clap");
 const log = @import("log.zig");
 const std = @import("std");
@@ -34,8 +35,9 @@ const command_names = b: {
 };
 
 const params = clap.parseParamsComptime(
-    \\-h, --help  Display this help and exit.
-    \\<command>   The command to run, and then its own arguments.
+    \\-h, --help     Display this help and exit.
+    \\-V, --version  Output version information and exit.
+    \\<command>      The command to run, and then its own arguments.
     \\
 );
 
@@ -53,6 +55,13 @@ fn run(
     }
 
     unreachable;
+}
+
+fn printVersion(io: std.Io, file: std.Io.File) !void {
+    var buf: [256]u8 = undefined;
+    var writer = file.writer(io, &buf);
+    try writer.interface.print("mixos {s}\n", .{build_options.version});
+    try writer.interface.flush();
 }
 
 fn listCommands(io: std.Io, file: std.Io.File) !void {
@@ -88,6 +97,10 @@ pub fn main(init: std.process.Init) !void {
 
     if (res.args.help != 0) {
         return listCommands(init.io, .stdout());
+    }
+
+    if (res.args.version != 0) {
+        return printVersion(init.io, .stdout());
     }
 
     const command = res.positionals[0] orelse {
