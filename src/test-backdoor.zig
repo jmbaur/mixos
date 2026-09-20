@@ -180,6 +180,31 @@ fn parseKernelCmdline(io: std.Io) !?ListenParam {
 
 const default_port = 8000;
 
+const nixos_ready_console = "/dev/hvc0";
+const nixos_ready_message = "Spawning backdoor root shell...\n";
+
+/// Where a machine under test says it is ready, which is the virtio console
+/// the NixOS test driver gives every machine. See the connect method of its
+/// Machine class, which waits for exactly this line before it goes on.
+fn nixosVmTestAnnounceReady(io: std.Io) void {
+    const cid = vsock.currentCid(io) catch {
+        return;
+    };
+
+    if (cid <= vsock.VMADDR_CID_HOST) {
+        return;
+    }
+
+    const console = std.Io.Dir.cwd().openFile(io, nixos_ready_console, .{ .mode = .write_only }) catch {
+        return;
+    };
+    defer console.close(io);
+
+    console.writeStreamingAll(io, nixos_ready_message) catch |err| {
+        log.warn("failed to announce readiness: {}", .{err});
+    };
+}
+
 fn detectDefaultListenParams(io: std.Io) !ListenParam {
     if (std.Io.Dir.cwd().access(io, "/dev/vsock", .{})) {
         if (vsock.currentCid(io)) |cid| {
@@ -296,6 +321,13 @@ pub fn main(
     defer server.deinit(init.io);
 
     log.info("server listening on {f}", .{listen_param});
+
+    switch (listen_param) {
+        // This is quite specific for the NixOS VM test framework, so we only
+        // do this if we are running via vsock.
+        .vsock => nixosVmTestAnnounceReady(init.io),
+        .unix, .ip_address => {},
+    }
 
     while (true) {
         const stream = try server.accept(init.io);

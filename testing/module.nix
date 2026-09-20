@@ -27,6 +27,8 @@ let
     mapAttrs'
     mkBefore
     mkDefault
+    mkForce
+    mkMerge
     mkIf
     mkOption
     nameValuePair
@@ -182,15 +184,24 @@ let
           "virtio_console"
           "virtio_pci"
           "virtio_rng"
+          # What the test driver reaches the varlink backdoor over.
+          "vmw_vsock_virtio_transport"
+          "vsock"
         ]
         ++ optional (interfaces != [ ]) "virtio_net";
 
-        boot.requiredKernelConfig = mkIf (interfaces != [ ]) {
-          INET = kernel.yes;
-          IPV6 = kernel.yes;
-          NET = kernel.yes;
-          VIRTIO_NET = kernel.module;
-        };
+        boot.requiredKernelConfig = mkMerge [
+          {
+            VIRTIO_VSOCKETS = kernel.module;
+            VSOCKETS = kernel.module;
+          }
+          (mkIf (interfaces != [ ]) {
+            INET = kernel.yes;
+            IPV6 = kernel.yes;
+            NET = kernel.yes;
+            VIRTIO_NET = kernel.module;
+          })
+        ];
 
         # Interfaces are found by MAC address and renamed, since the names the
         # kernel hands out depend on probe order. This is the job the udev
@@ -236,60 +247,18 @@ let
           (toString config.testing.qemu.cpus)
           "-m"
           "${(toString config.testing.qemu.memory)}B"
+          # The vsock device the driver attaches is a vhost-user one, which can
+          # only work with guest memory it can map itself.
+          "-object"
+          "memory-backend-memfd,id=mem0,size=${toString config.testing.qemu.memory},share=on"
+          "-machine"
+          "memory-backend=mem0"
         ]
         ++ optionals config.boot.watchdog.enable [
           "-device"
           "i6300esb"
         ];
 
-        # TODO(jared): consider using CONFIG_BASH_IS_ASH in busybox config.
-        packages = [ pkgs.bashNonInteractive ];
-
-        # copied from https://github.com/nixos/nixpkgs/blob/master/nixos/modules/testing/test-instrumentation.nix#L28
-        services.nixos-test-backdoor.run = pkgs.writeShellScript "nixos-test-backdoor-run" ''
-          export USER=root
-          export HOME=/root
-          export DISPLAY=:0.0
-
-          # Determine if this script is ran with nounset
-          strict="false"
-          if set -o | grep --quiet --perl-regexp "nounset\s+on"; then
-              strict="true"
-          fi
-
-          if [[ -e /etc/profile ]]; then
-              # TODO: Currently shell profiles are not checked at build time,
-              # so we need to unset stricter options to source them
-              set +o nounset
-              # shellcheck disable=SC1091
-              source /etc/profile
-              [ "$strict" = "true" ] && set -o nounset
-          fi
-
-          # Don't use a pager when executing backdoor
-          # actions. Because we use a tty, commands like systemctl
-          # or nix-store get confused into thinking they're running
-          # interactively.
-          export PAGER=
-
-          cd /tmp
-          exec < /dev/hvc0 > /dev/hvc0
-          while ! exec 2> /dev/console; do sleep 0.1; done
-          echo "connecting to host..." >&2
-          stty -F /dev/hvc0 raw -echo # prevent nl -> cr/nl conversion
-          # The following line is essential since it signals to
-          # the test driver that the shell is ready.
-          # See: the connect method in the Machine class.
-          echo "Spawning backdoor root shell..."
-          # Passing the terminal device makes bash run non-interactively.
-          # Otherwise we get errors on the terminal because bash tries to
-          # setup things like job control.
-          # Note: calling bash explicitly here instead of sh makes sure that
-          # we can also run non-NixOS guests during tests. This, however, is
-          # mostly futureproofing as the test instrumentation is still very
-          # tightly coupled to NixOS.
-          PS1="" exec ${pkgs.bashNonInteractive}/bin/bash --norc /dev/hvc0
-        '';
       };
     };
 
@@ -310,13 +279,6 @@ let
       qemuOpts = escapeShellArgs (
         mixosConfig.testing.qemu.args
         ++ [
-          # TODO(jared): The NixOS VM test framework does some extra
-          # steps to make vsock work without /dev/vhost-vsock
-          # availability in the sandbox.
-          # # Provide guest CIDs starting where NixOS VM nodes end, starting at 3 (lowest guest CID)
-          # # https://github.com/nixos/nixpkgs/blob/master/nixos/lib/test-driver/src/test_driver/driver.py#L113
-          # "-device"
-          # "vhost-vsock-pci,guest-cid=${toString (3 + length (attrNames config.nodes))}"
           "-kernel"
           "${mixosConfig.system.build.toplevel}/kernel"
           "-initrd"
@@ -403,6 +365,14 @@ in
           assertion = overlappingNames == [ ];
           message = "The test driver exposes these MixOS machines under the same names as NixOS machines in the same test: ${concatStringsSep ", " overlappingNames}";
         }
+        {
+          # The machines are reached over vsock, which needs the driver's
+          # vhost-device-vsock and guest memory qemu can share, neither of
+          # which macOS has. The same reason the framework's own SSH backdoor
+          # is Linux-only.
+          assertion = config.mixos.nodes != { } -> hostPkgs.stdenv.hostPlatform.isLinux;
+          message = "MixOS machines in a test are not supported on macOS host systems!";
+        }
       ];
 
     # Hand the MixOS machines to the test driver along with the NixOS ones, so
@@ -414,10 +384,17 @@ in
       start_script = startScript;
     }) startScripts;
 
-    # The driver hands the MixOS machines to the test script like any other VM
-    # node, but they don't run systemd, so take the systemd-only methods of the
-    # driver's machine class away from them before the test starts.
+    # MixOS machines are reached over vsock, which the driver only sets up when
+    # it is asked for the SSH backdoor.
+    driverConfiguration.enable_ssh_backdoor = mkIf (config.mixos.nodes != { }) (mkForce true);
+
+    # What the test script talks to the MixOS machines with.
+    extraPythonPackages = p: [ p.mixos ];
+
     testScript = mkIf (config.mixos.nodes != { }) (mkBefore ''
+      import datetime as _dt
+      import mixos as _mixos
+
       class SystemdUnsupportedError(Exception):
           """
           Raised when a test calls a systemd-only method of the NixOS test driver's
@@ -434,7 +411,91 @@ in
           stub.__name__ = method
           return stub
 
-      for mixos_machine in [${concatMapStringsSep ", " pythonizeName (attrNames config.mixos.nodes)}]:
+      MIXOS_BACKDOOR_PORT = 8000
+      MIXOS_BACKDOOR_ATTR = "_mixos_backdoor"
+
+      class MixosBackdoorError(Exception):
+          """Raised when the varlink backdoor of a MixOS machine cannot be reached."""
+
+      def _mixos_forget_backdoor(machine):
+          """Lets go of the connection, so that the next call opens a new one."""
+          backdoor = getattr(machine, MIXOS_BACKDOOR_ATTR, None)
+
+          if backdoor is not None:
+              setattr(machine, MIXOS_BACKDOOR_ATTR, None)
+              backdoor.__exit__(None, None, None)
+
+      def _mixos_backdoor(machine, timeout):
+          if machine.vsock_host is None:
+              raise MixosBackdoorError(
+                  f"{machine.name}: the driver set up no vsock socket for this machine"
+              )
+
+          backdoor = getattr(machine, MIXOS_BACKDOOR_ATTR, None)
+
+          if backdoor is None:
+              backdoor = _mixos.Machine(
+                  f"vsock-mux:{machine.vsock_host}:{MIXOS_BACKDOOR_PORT}"
+              ).__enter__()
+              setattr(machine, MIXOS_BACKDOOR_ATTR, backdoor)
+
+          backdoor.set_timeout(timeout)
+
+          return backdoor
+
+      # MixOS machines have no shell on the virtio console the driver's own
+      # commands would go to. Commands go to test-backdoor over vsock.
+      def _mixos_execute(machine):
+          def execute(command, check_return=True, check_output=True, timeout=_dt.timedelta(minutes=15)):
+              # A machine the test has taken down leaves a connection that is
+              # no good to anyone, so let go of it before waiting for the
+              # machine to be back up.
+              if not machine.connected:
+                  _mixos_forget_backdoor(machine)
+
+              # Dialling a machine that is down screws up the multiplexer, so
+              # ensure we are connected first.
+              machine.connect()
+
+              # "set -eu" rather than the driver's "set -euo pipefail", since
+              # this is busybox ash rather than bash.
+              argv = ["/bin/sh", "-c", f"set -eu; {command}"]
+              seconds = int(timeout.total_seconds()) if timeout is not None else None
+
+              # Longer than the command is given, so that a command running too
+              # long is the backdoor's to report rather than a dead connection.
+              backdoor = _mixos_backdoor(machine, None if seconds is None else seconds + 30)
+
+              try:
+                  if not check_output:
+                      # No reply to wait for: this is how a test runs a command
+                      # that takes the machine, and with it the backdoor, down.
+                      backdoor.RunCommand(command=argv, timeout=seconds, _oneway=True)
+                      _mixos_forget_backdoor(machine)
+                      return (-2, "")
+
+                  response = backdoor.RunCommand(command=argv, timeout=seconds)
+              except OSError:
+                  # Whatever went wrong with it, the connection is no longer one
+                  # to hand the next command to.
+                  _mixos_forget_backdoor(machine)
+                  raise
+
+              # The driver's shell backdoor leaves stderr on the console, so
+              # this is where it would have shown up.
+              if response["stderr"]:
+                  machine.log(response["stderr"].rstrip())
+
+              return (response["exit_code"] if check_return else -1, response["stdout"])
+
+          return execute
+
+      # The driver hands the MixOS machines to the test script like any other
+      # VM node, but they don't run systemd, so take the systemd-only methods
+      # of the driver's machine class away from them before the test starts.
+      for _mixos_machine in [${concatMapStringsSep ", " pythonizeName (attrNames config.mixos.nodes)}]:
+          _mixos_machine._execute = _mixos_execute(_mixos_machine)
+
           for method in (
               "get_unit_info",
               "get_unit_property",
@@ -446,7 +507,7 @@ in
               "wait_for_unit",
               "wait_for_x",
           ):
-              setattr(mixos_machine, method, _systemd_stub(mixos_machine.name, method))
+              setattr(_mixos_machine, method, _systemd_stub(_mixos_machine.name, method))
     '');
 
     # Have the driver start a VDE switch for the virtual networks that only
@@ -455,6 +516,14 @@ in
       machine: map (interface: interface.vlan) (attrValues machine.virtualisation.allInterfaces)
     ) (attrValues config.mixos.nodes);
 
-    defaults.networking.extraHosts = mixosHosts;
+    defaults = {
+      networking.extraHosts = mixosHosts;
+
+      # The vsock device the driver attaches to every machine in the test,
+      # MixOS or not, is a vhost-user one, which can only work with guest
+      # memory it can map itself. Most NixOS nodes have this on already, since
+      # virtiofs needs it too.
+      virtualisation.qemu.enableSharedMemory = mkIf (config.mixos.nodes != { }) (mkDefault true);
+    };
   };
 }

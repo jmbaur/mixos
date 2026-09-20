@@ -13,6 +13,7 @@ class Protocol(Enum):
     TCP = 1
     UNIX = 2
     VSOCK = 3
+    VSOCK_MUX = 4
 
 
 class RebootType(Enum):
@@ -25,11 +26,16 @@ class RebootType(Enum):
 
 
 class Machine(varlink.SimpleClientInterfaceHandler):
-    def __init__(self, conn):
+    def __init__(self, conn, timeout=None):
         """
         Creates a new MixOS Machine
+
+        A timeout, in seconds, bounds how long any single exchange with the
+        machine waits on it. Without one, a machine that goes away mid-call
+        leaves the caller waiting forever.
         """
         self._conn = Machine._parse_connection_string(conn)
+        self._timeout = timeout
         self.client = None
         self.interface = None
 
@@ -46,9 +52,25 @@ class Machine(varlink.SimpleClientInterfaceHandler):
         if self.interface is not None:
             self.interface.__exit__(type, value, traceback)
 
+    def set_timeout(self, timeout):
+        """
+        Bounds how long each further exchange with the machine waits on it,
+        in seconds. None waits forever.
+        """
+        self._timeout = timeout
+
+        if self._connection is not None:
+            self._connection.settimeout(timeout)
+
     @staticmethod
     def _parse_connection_string(conn: str):
-        if conn.startswith("vsock:"):
+        if conn.startswith("vsock-mux:"):
+            split = conn[len("vsock-mux:") :].rsplit(":", maxsplit=1)
+            assert len(split) == 2
+            path = split[0]
+            port = int(split[1])
+            return (Protocol.VSOCK_MUX, (path, port))
+        elif conn.startswith("vsock:"):
             split = conn[len("vsock:") :].split(":", maxsplit=1)
             assert len(split) == 2
             cid = int(split[0])
@@ -70,14 +92,39 @@ class Machine(varlink.SimpleClientInterfaceHandler):
             case Protocol.VSOCK:
                 logger.debug(f"connecting to vsock host {self._conn[1]}")
                 sock = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+                sock.settimeout(self._timeout)
                 sock.connect(self._conn[1])
+            case Protocol.VSOCK_MUX:
+                path, port = self._conn[1]
+                logger.debug(f"connecting to vsock multiplexer {path} port {port}")
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(self._timeout)
+                sock.connect(path)
+                # Hypervisors that cannot hand out AF_VSOCK to the host
+                # (firecracker, cloud-hypervisor, vhost-device-vsock) multiplex
+                # it over a unix socket, where a guest port is dialled like
+                # this.
+                sock.sendall(f"CONNECT {port}\n".encode())
+                greeting = b""
+                while not greeting.endswith(b"\n"):
+                    byte = sock.recv(1)
+                    if not byte:
+                        raise ConnectionError(
+                            f"{path}: the multiplexer closed the connection"
+                        )
+                    greeting += byte
+                if not greeting.startswith(b"OK"):
+                    raise ConnectionError(
+                        f"{path}: the multiplexer refused port {port}: {greeting!r}"
+                    )
             case Protocol.UNIX:
                 logger.debug(f"connection to unix domain socket host {self._conn[1]}")
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(self._timeout)
                 sock.connect(self._conn[1])
             case Protocol.TCP:
                 logger.debug(f"connecting to TCP host {self._conn[1]}")
-                sock = socket.create_connection(self._conn[1])
+                sock = socket.create_connection(self._conn[1], timeout=self._timeout)
 
         interface_name = "com.jmbaur.mixos"
         client = varlink.Client()
@@ -104,7 +151,7 @@ def cli():
         "--address",
         type=str,
         required=True,
-        help="Address of the MixOS machine, of the form <ipv4>:<port>, [<ipv6>]:<port>, or vsock:<cid>:<port>",
+        help="Address of the MixOS machine, of the form <ipv4>:<port>, [<ipv6>]:<port>, vsock:<cid>:<port>, or vsock-mux:<path>:<port>",
     )
     subparsers = parser.add_subparsers(dest="method", help="Varlink method to call")
     parser_run_command = subparsers.add_parser(
