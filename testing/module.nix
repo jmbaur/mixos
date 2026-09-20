@@ -490,11 +490,43 @@ in
 
           return execute
 
+      # The driver takes a machine down by writing "poweroff" to the shell it
+      # expects on the virtio console, which a MixOS machine does not have.
+      # Ask test-backdoor to signal PID 1 instead.
+      def _mixos_shutdown(machine):
+          def shutdown():
+              if not machine.booted:
+                  return
+
+              # A machine the test has taken down leaves a connection that is
+              # no good to anyone, so let go of it before waiting for the
+              # machine to be back up.
+              if not machine.connected:
+                  _mixos_forget_backdoor(machine)
+
+              # Dialling a machine that is down screws up the multiplexer, so
+              # ensure we are connected first.
+              machine.connect()
+
+              backdoor = _mixos_backdoor(machine, 30)
+
+              try:
+                  # No reply to wait for: the backdoor goes down with the
+                  # machine it is taking down.
+                  backdoor.Reboot(reboot_type="poweroff", _oneway=True)
+              finally:
+                  _mixos_forget_backdoor(machine)
+
+              machine.wait_for_shutdown()
+
+          return shutdown
+
       # The driver hands the MixOS machines to the test script like any other
       # VM node, but they don't run systemd, so take the systemd-only methods
       # of the driver's machine class away from them before the test starts.
       for _mixos_machine in [${concatMapStringsSep ", " pythonizeName (attrNames config.mixos.nodes)}]:
           _mixos_machine._execute = _mixos_execute(_mixos_machine)
+          _mixos_machine.shutdown = _mixos_shutdown(_mixos_machine)
 
           for method in (
               "get_unit_info",

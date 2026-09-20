@@ -59,6 +59,7 @@ _: {
         machine.succeed("mount | grep '/dev/vda on /state type ext2'")
         machine.succeed("test -e /state/hi")
         machine.succeed("test -e /state/restarted")
+        machine.shutdown()
 
     with subtest("state initialization times out"):
         stuck.start()
