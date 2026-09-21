@@ -1,10 +1,13 @@
 {
   bintools,
   buildPackages,
+  callPackage,
   lib,
   nukeReferences,
   stdenvNoCC,
   zig_0_16,
+
+  revision ? "main", # just for docs
 }:
 
 stdenvNoCC.mkDerivation (finalAttrs: {
@@ -69,10 +72,17 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     nuke-refs -e $buildtools $buildtools/bin/*
   '';
 
-  passthru.deps = buildPackages.zig_0_16.fetchDeps {
-    pname = "mixos";
-    inherit (finalAttrs) src version;
-    hash = "sha256-A3pySKRvLqRuNEP0AwEIYemVG6l5iysmYX7B/GVHumQ=";
+  passthru = {
+    deps = buildPackages.zig_0_16.fetchDeps {
+      pname = "mixos";
+      inherit (finalAttrs) src version;
+      hash = "sha256-A3pySKRvLqRuNEP0AwEIYemVG6l5iysmYX7B/GVHumQ=";
+    };
+
+    manual = callPackage ./doc {
+      inherit revision;
+      inherit (finalAttrs) version;
+    };
   };
 
   meta = {

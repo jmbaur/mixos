@@ -25,6 +25,7 @@
         mapAttrs
         mapAttrs'
         nameValuePair
+        pipe
         readDir
         removeSuffix
         ;
@@ -48,7 +49,10 @@
     in
     {
       overlays.default = final: prev: {
-        mixos = final.callPackage ./package.nix { };
+        mixos = final.callPackage ./package.nix {
+          revision = inputs.self.rev or "main";
+        };
+
         pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
           (flip (
             const (pyfinal: {
@@ -67,21 +71,23 @@
         let
           pkgs = inputs.self.legacyPackages.x86_64-linux;
         in
-        unionOfDisjoint
-          (mapAttrs' (flip (
-            const (
-              test:
-              nameValuePair "test-${removeSuffix ".nix" test}" {
-                x86_64-linux = pkgs.testers.runNixOSTest {
-                  imports = [
-                    inputs.self.lib.nixosTestModule
-                    ./testing/tests/${test}
-                  ];
-                };
-              }
-            )
-          )) (readDir ./testing/tests))
-          (
+        pipe { manual.x86_64-linux = pkgs.mixos.manual; } [
+          (unionOfDisjoint (
+            mapAttrs' (flip (
+              const (
+                test:
+                nameValuePair "test-${removeSuffix ".nix" test}" {
+                  x86_64-linux = pkgs.testers.runNixOSTest {
+                    imports = [
+                      inputs.self.lib.nixosTestModule
+                      ./testing/tests/${test}
+                    ];
+                  };
+                }
+              )
+            )) (readDir ./testing/tests)
+          ))
+          (unionOfDisjoint (
             listToAttrs (
               map
                 (pkgs: {
@@ -101,13 +107,19 @@
                   pkgs
                   pkgs.pkgsCross.aarch64-multiplatform
                   pkgs.pkgsCross.armv7l-hf-multiplatform
-                  pkgs.pkgsCross.riscv64
-                  pkgs.pkgsCross.riscv32
-                  pkgs.pkgsCross.ppc64
+                  pkgs.pkgsCross.gnu32
+                  pkgs.pkgsCross.loongarch64-linux
                   pkgs.pkgsCross.mips64el-linux-gnuabi64
+                  pkgs.pkgsCross.mipsel-linux-gnu
+                  pkgs.pkgsCross.powernv
+                  pkgs.pkgsCross.ppc64
+                  pkgs.pkgsCross.riscv32
+                  pkgs.pkgsCross.riscv64
+                  pkgs.pkgsCross.s390x
                 ]
             )
-          );
+          ))
+        ];
 
       legacyPackages = genAttrs [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
         system:
