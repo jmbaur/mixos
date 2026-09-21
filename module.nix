@@ -281,6 +281,22 @@ in
         '';
       };
 
+      initrd.prepend = mkOption {
+        type = types.listOf types.path;
+        default = [ ];
+        example = literalExpression ''[ "''${pkgs.microcode-intel}/intel-ucode.img" ]'';
+        description = ''
+          Other initrd files to prepend to the initrd MixOS builds. The kernel
+          unpacks the concatenated archives in order, each one either a plain
+          cpio archive or a compressed one.
+
+          Since MixOS owns the initrd, this is how CPU microcode gets supplied.
+          Microcode is the one thing here that must be an _uncompressed_ cpio
+          archive, and must come first (see `lib.mkOrder`), because the kernel
+          scans for it in the raw initrd before unpacking any of it.
+        '';
+      };
+
       kernelModules = mkOption {
         type = types.listOf types.str;
         default = [ ];
@@ -451,6 +467,11 @@ in
       example = literalExpression ''
         { "hostname".source = pkgs.writeText "hostname" "my-machine"; }
       '';
+      description = ''
+        Files to place in /etc, keyed by their path relative to /etc. Each
+        entry is either symlinked into the store or, if a mode is given,
+        copied with that mode.
+      '';
     };
 
     groups = mkOption {
@@ -462,15 +483,26 @@ in
               name = mkOption {
                 type = types.str;
                 default = name;
+                description = ''
+                  Name of the group, as it appears in /etc/group. Defaults to
+                  the attribute name.
+                '';
               };
               id = mkOption {
                 type = types.ints.u16;
+                description = ''
+                  Group ID. There is no automatic allocation, so this must be
+                  chosen, and kept unique, by hand.
+                '';
               };
             };
           }
         )
       );
       default = { };
+      description = ''
+        Groups to create in /etc/group.
+      '';
     };
 
     users = mkOption {
@@ -482,30 +514,64 @@ in
               name = mkOption {
                 type = types.str;
                 default = name;
+                description = ''
+                  Name of the user, as it appears in /etc/passwd. Defaults to
+                  the attribute name.
+                '';
               };
-              uid = mkOption { type = types.ints.u16; };
-              gid = mkOption { type = types.ints.u16; };
+              uid = mkOption {
+                type = types.ints.u16;
+                description = ''
+                  User ID. There is no automatic allocation, so this must be
+                  chosen, and kept unique, by hand.
+                '';
+              };
+              gid = mkOption {
+                type = types.ints.u16;
+                description = ''
+                  ID of the user's primary group. This is the raw ID rather
+                  than a name, so it must match the `id` of the intended entry
+                  in `groups`.
+                '';
+              };
               description = mkOption {
                 type = types.str;
                 default = "";
+                description = ''
+                  The GECOS field of the user's /etc/passwd entry.
+                '';
               };
               home = mkOption {
                 type = types.str;
                 default = "/var/empty";
+                description = ''
+                  The user's home directory. Nothing creates it, so a
+                  directory that does not otherwise exist stays missing.
+                '';
               };
               shell = mkOption {
                 type = types.path;
                 default = "/bin/nologin";
+                description = ''
+                  The user's login shell.
+                '';
               };
               groups = mkOption {
                 type = types.listOf types.str;
                 default = [ ];
+                description = ''
+                  Names of supplementary groups the user is a member of, on
+                  top of the primary group named by `gid`.
+                '';
               };
             };
           }
         )
       );
       default = { };
+      description = ''
+        Users to create in /etc/passwd.
+      '';
     };
 
     init = mkOption {
@@ -571,10 +637,22 @@ in
             deps = mkOption {
               type = types.listOf types.str;
               default = [ ];
+              example = [ "mount-state" ];
+              description = ''
+                Names of other init entries this one must be ordered after.
+                Ordering only applies within a single action: every name
+                listed here must name an enabled entry with the same `action`
+                as this one, or evaluation fails.
+              '';
             };
           };
         })
       );
+      description = ''
+        Entries for busybox init's /etc/inittab, keyed by a name used only for
+        ordering with `deps`. Actions run in the order listed under `action`,
+        not in the order entries are declared here.
+      '';
     };
 
     services = mkOption {
@@ -600,6 +678,11 @@ in
         })
       );
       default = { };
+      description = ''
+        Long-running processes to supervise, keyed by service name. Each one
+        becomes a service directory under /var/service, run by the runsvdir
+        started from `init`.
+      '';
     };
 
     mdev.rules = mkOption {
@@ -681,10 +764,18 @@ in
             ID = mkOption {
               type = types.str;
               default = "mixos";
+              description = ''
+                The `ID` field of /etc/os-release, identifying the operating
+                system.
+              '';
             };
             VERSION_ID = mkOption {
               type = types.str;
               default = config.mixos.package.version;
+              defaultText = literalExpression "config.mixos.package.version";
+              description = ''
+                The `VERSION_ID` field of /etc/os-release.
+              '';
             };
           };
         };
@@ -1120,6 +1211,10 @@ in
               fi
 
               mkdir -p initrd $out
+
+              # Prepended archives are concatenated ahead of our cpio
+              # stream; the kernel unpacks each segment in turn.
+              ${concatMapStringsSep "\n" (prepend: ''cat ${prepend} >>"$out/initrd"'') config.boot.initrd.prepend}
 
               # Copy kernel modules that are crucial for booting. We don't need
               # to provide any user-customizability here since the root
