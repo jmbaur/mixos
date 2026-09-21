@@ -1066,7 +1066,7 @@ in
       system.build.manifest = manifestFormat.generate "mixos-manifest.json" {
         inherit (builtins) storeDir;
         inherit (config.system.build) usr etc;
-        init = getExe' pkgs.busybox "init";
+        init = [ (getExe' pkgs.busybox "init") ];
         boot = {
           inherit (config.boot) kernelModules;
           watchdog =

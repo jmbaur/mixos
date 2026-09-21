@@ -15,7 +15,9 @@ const posix = std.posix;
 const mixos_varlink = @import("mixos_varlink");
 const varlink = @import("varlink");
 
+const cmdline = @import("cmdline.zig");
 const process = @import("process.zig");
+const switch_root = @import("switch-root.zig");
 const syslog = @import("syslog.zig");
 const vsock = @import("vsock.zig");
 
@@ -42,16 +44,10 @@ const Context = struct {
             const conn_data: ConnectionData = request_context.getData();
             const io = conn_data.io;
 
-            const ready = if (parameters.reboot_type == .kexec) b: {
-                const kexec_loaded = std.Io.Dir.cwd().openFile(
-                    io,
-                    "/sys/kernel/kexec_loaded",
-                    .{},
-                ) catch break :b false;
-                var reader = kexec_loaded.reader(io, &.{});
-                const byte = reader.interface.takeByte() catch break :b false;
-                break :b byte == '1';
-            } else true;
+            const ready = if (parameters.reboot_type == .kexec)
+                switch_root.kexecLoaded(io)
+            else
+                true;
 
             if (!ready) {
                 return try request_context.serializeError(mixos_varlink.RebootNotReady{});
@@ -59,9 +55,18 @@ const Context = struct {
 
             try request_context.serializeResponse(.{});
 
+            // Ensure we flush the response so that a client can expect a
+            // response before we go down. This prevents the need for oneway
+            // varlink communication.
+            try request_context.getConnection().response_writer.flush();
+
             switch (parameters.reboot_type) {
                 .kexec => {
-                    posix.reboot(.KEXEC) catch |err| {
+                    // Since we already verified a kernel has been loaded,
+                    // SIGQUIT to PID 1 will run our shutdown and switch-root
+                    // program, which will do the actuall call to reboot() with
+                    // the KEXEC flag.
+                    posix.kill(1, posix.SIG.QUIT) catch |err| {
                         log.err("failed to kexec: {}", .{err});
                     };
                 },
@@ -157,26 +162,19 @@ const ListenParam = union(enum) {
     }
 };
 
-fn parseKernelCmdline(io: std.Io) !?ListenParam {
-    var buf: [1024]u8 = undefined;
+/// Kernel parameter saying where the backdoor listens, for a machine whose
+/// test framework cannot pass it an argument.
+const listen_param_name = cmdline.prefix ++ "test_backdoor";
 
-    var cmdline = try std.Io.Dir.cwd().openFile(io, "/proc/cmdline", .{});
-    defer cmdline.close(io);
+fn parseKernelCmdline(io: std.Io) ?ListenParam {
+    var buf: [cmdline.max_len]u8 = undefined;
 
-    var cmdline_reader = cmdline.reader(io, &buf);
+    const value = cmdline.param(io, listen_param_name, &buf) orelse return null;
 
-    while (try cmdline_reader.interface.takeDelimiter(' ')) |entry| {
-        var entry_split = std.mem.splitScalar(u8, entry, '=');
-
-        if (std.mem.eql(u8, entry_split.next() orelse continue, "mixos.test_backdoor")) {
-            return ListenParam.parse(entry_split.next() orelse continue) catch |err| {
-                log.warn("failed to parse mixos.test_backdoor= kernel param: {}", .{err});
-                continue;
-            };
-        }
-    }
-
-    return null;
+    return ListenParam.parse(value) catch |err| {
+        log.warn("failed to parse {s}= kernel param: {}", .{ listen_param_name, err });
+        return null;
+    };
 }
 
 const default_port = 8000;
@@ -300,7 +298,7 @@ pub fn main(
 
     var listen_param = try detectDefaultListenParams(init.io);
 
-    if (try parseKernelCmdline(init.io)) |param| {
+    if (parseKernelCmdline(init.io)) |param| {
         listen_param = param;
     }
 

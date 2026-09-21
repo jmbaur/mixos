@@ -7,5 +7,6 @@ preface.md
 ```
 
 ```{=include=} chapters
+kernel-parameters.md
 options.md
 ```

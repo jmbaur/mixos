@@ -215,7 +215,7 @@ let
         # Interfaces are found by MAC address and renamed, since the names the
         # kernel hands out depend on probe order. This is the job the udev
         # rules in <nixpkgs/nixos/lib/testing/network.nix> do for the NixOS machines.
-        init.network = mkIf (interfaces != [ ]) {
+        init.test-network = mkIf (interfaces != [ ]) {
           action = "sysinit";
           tty = "console"; # so that failures to set up the network are visible
           process =
@@ -251,7 +251,6 @@ let
         nixpkgs.pkgs = testConfig.node.pkgs;
 
         testing.qemu.args = [
-          "-nographic"
           "-smp"
           (toString config.testing.qemu.cpus)
           "-m"
@@ -267,7 +266,6 @@ let
           "-device"
           "i6300esb"
         ];
-
       };
     };
 
@@ -281,6 +279,7 @@ let
     name: mixosConfig:
     let
       inherit (mixosConfig.testing.qemu) diskImage;
+      # TODO(jared): extend kernelCmdline option as opposed to unconditionally adding here
       kernelCmdline = [
         "debug"
       ]
@@ -521,9 +520,7 @@ in
               backdoor = _mixos_backdoor(machine, 30)
 
               try:
-                  # No reply to wait for: the backdoor goes down with the
-                  # machine it is taking down.
-                  backdoor.Reboot(reboot_type="poweroff", _oneway=True)
+                  backdoor.Reboot(reboot_type="poweroff")
               finally:
                   _mixos_forget_backdoor(machine)
 
@@ -531,12 +528,28 @@ in
 
           return shutdown
 
+      # The driver reboots a machine down by pressing ctrl+alt+del, but busybox
+      # handles that different from systemd.
+      def _mixos_reboot(machine):
+          def reboot():
+              machine.connect()
+              backdoor = _mixos_backdoor(machine, 30)
+
+              try:
+                  return backdoor.Reboot(reboot_type="reboot")
+              finally:
+                  _mixos_forget_backdoor(machine)
+                  machine.connected = False
+
+          return reboot
+
       # The driver hands the MixOS machines to the test script like any other
       # VM node, but they don't run systemd, so take the systemd-only methods
       # of the driver's machine class away from them before the test starts.
       for _mixos_machine in [${concatMapStringsSep ", " pythonizeName (attrNames config.mixos.nodes)}]:
           _mixos_machine._execute = _mixos_execute(_mixos_machine)
           _mixos_machine.shutdown = _mixos_shutdown(_mixos_machine)
+          _mixos_machine.reboot = _mixos_reboot(_mixos_machine)
 
           for method in (
               "get_unit_info",

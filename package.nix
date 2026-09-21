@@ -50,6 +50,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     "-Dtarget=${
       {
         "armv7l-linux" = "arm-linux";
+        "i686-linux" = "x86-linux";
       }
       .${stdenvNoCC.hostPlatform.system} or stdenvNoCC.hostPlatform.system
     }"

@@ -39,6 +39,8 @@ _: {
   };
 
   testScript = ''
+    import datetime
+
     machine.start(allow_reboot=True)
     machine.succeed("test -b /dev/vda")
     machine.succeed("mount | grep '/dev/vda on /state type ext2'")
@@ -63,7 +65,10 @@ _: {
 
     with subtest("state initialization times out"):
         stuck.start()
-        stuck.wait_for_console_text("failed to run state initialization: error.Timeout", timeout=60)
+        stuck.wait_for_console_text(
+            "failed to run state initialization: error.Timeout",
+            timeout=datetime.timedelta(seconds=60),
+        )
         stuck.wait_for_shutdown() # the watchdog goes off once boot has failed
   '';
 }

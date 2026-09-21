@@ -1,12 +1,8 @@
 # Preface {#preface}
 
-MixOS is not NixOS. It is a Nix OS: a minimal Linux system built with Nix, in
-which busybox, PID 1, the shell and the coreutils are a single statically
-linked executable.
+MixOS is not NixOS. It is a Nix OS: a minimal Linux system built with Nix, which boots with a single statically linked `mixos` executable and uses busybox for the system's init, shell and coreutils.
 
-A MixOS system is built from the module in
-[`module.nix`](https://github.com/jmbaur/mixos/blob/main/module.nix), evaluated
-with `mixosSystem` from this flake:
+A MixOS system is built from the module in [`module.nix`](https://github.com/jmbaur/mixos/blob/main/module.nix), evaluated with `mixosSystem` from this flake:
 
 ```nix
 {

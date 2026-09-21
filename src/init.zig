@@ -2,6 +2,7 @@ const Kmod = @import("kmod.zig");
 const Mount = @import("mount.zig");
 const Watchdog = @import("watchdog.zig");
 const builtin = @import("builtin");
+const cmdline = @import("cmdline.zig");
 const kmsg = @import("kmsg.zig");
 const linux = @import("linux.zig");
 const netlink = @import("netlink.zig");
@@ -45,8 +46,8 @@ const StateConfig = struct {
 };
 
 pub const Manifest = struct {
-    /// The PID1 of the post-initrd system.
-    init: []const u8,
+    /// The command line of the system's PID1.
+    init: []const []const u8,
 
     /// The nix store dir (most likely /nix/store).
     storeDir: []const u8,
@@ -188,23 +189,11 @@ pub fn setupRoot(
 
 /// Kernel parameter asking for the running mixos to stand in for the one in the
 /// store, mostly helpful for debugging.
-const self_override_param = "mixos.self_override";
+const self_override_param = cmdline.prefix ++ "self_override";
 
 fn selfOverrideRequested(io: std.Io) bool {
-    var buf: [4096]u8 = undefined;
-
-    const cmdline = std.Io.Dir.cwd().openFile(io, "/proc/cmdline", .{}) catch return false;
-    defer cmdline.close(io);
-
-    var cmdline_reader = cmdline.reader(io, &buf);
-
-    while (cmdline_reader.interface.takeDelimiter(' ') catch return false) |entry| {
-        if (std.mem.eql(u8, std.mem.trimEnd(u8, entry, "\n"), self_override_param)) {
-            return true;
-        }
-    }
-
-    return false;
+    var buf: [cmdline.max_len]u8 = undefined;
+    return cmdline.param(io, self_override_param, &buf) != null;
 }
 
 fn overrideStoreMixos(io: std.Io, arena_alloc: std.mem.Allocator, root_dir: std.Io.Dir) !void {
@@ -807,15 +796,11 @@ fn setupWatchdog(io: std.Io, config: *const WatchdogConfig) !?Watchdog {
 fn setupSystem(
     init: std.process.Init,
     stage2_init_allocator: std.mem.Allocator,
-) ![*:0]const u8 {
-    // We create this memfd object as early as possible, mostly so we get the
-    // vanity of having a low file descriptor number.
-    //
-    // CLOEXEC because this descriptor is ours and no one else's: PID1 exec's
-    // the real init at the end of all this, and anything holding the store open
-    // across that would keep the whole image in memory and show up in every
-    // /proc/<pid>/fd in the system.
-    const store_fd = try linux.memfdCreate("store", system.MFD.ALLOW_SEALING | system.MFD.CLOEXEC);
+) ![:null]const ?[*:0]const u8 {
+    const store_fd = try linux.memfdCreate(
+        "store",
+        system.MFD.ALLOW_SEALING | system.MFD.CLOEXEC,
+    );
 
     const allocator = init.arena.allocator();
 
@@ -909,7 +894,7 @@ pub fn bringUp(
     stage2_init_allocator: std.mem.Allocator,
     manifest: *const Manifest,
     store: *Mount,
-) ![:0]const u8 {
+) ![:null]const ?[*:0]const u8 {
     const override_self = selfOverrideRequested(init.io);
 
     var root_dir = try std.Io.Dir.cwd().openDir(init.io, "/", .{});
@@ -981,11 +966,20 @@ pub fn bringUp(
         log.err("failed to setup networking: {}", .{err});
     };
 
-    log.debug("executing init {s}", .{manifest.init});
+    if (manifest.init.len == 0) {
+        return error.EmptyInit;
+    }
+
+    log.debug("executing init {s}", .{manifest.init[0]});
+
+    // Copied into the caller's allocator because everything else we are
+    // holding goes away with the old root.
+    const argv = try stage2_init_allocator.allocSentinel(?[*:0]const u8, manifest.init.len, null);
+    for (manifest.init, 0..) |arg, i| argv[i] = try stage2_init_allocator.dupeZ(u8, arg);
 
     if (watchdog) |*w| w.deinit(init.io, .{ .disarm = true });
 
-    return try stage2_init_allocator.dupeZ(u8, manifest.init);
+    return argv;
 }
 
 pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.Iterator) anyerror!void {
@@ -994,38 +988,29 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
 
     if (system.getpid() != 1) {
         log.err("not running as PID1, refusing to continue", .{});
-        @panic("PANIC");
+        return error.NotPid1;
     }
 
     var fba_buffer = std.mem.zeroes([std.fs.max_path_bytes]u8);
     var fba: std.heap.FixedBufferAllocator = .init(&fba_buffer);
 
-    const stage2_init = setupSystem(
+    if (setupSystem(
         init,
         fba.allocator(),
-    ) catch |err| {
+    )) |stage2_init| {
+        kmsg.deinit();
+        init.arena.deinit();
+
+        comptime std.debug.assert(builtin.link_libc);
+        const err = system.errno(system.execve(
+            stage2_init[0].?,
+            stage2_init.ptr,
+            std.process.Environ.empty.block.slice,
+        ));
+        log.err("execve '{s}' failed: {}", .{ stage2_init[0].?, err });
+    } else |err| {
         log.err("system setup failed: {}", .{err});
+    }
 
-        // TODO(jared): If we don't have the watchdog enabled, we
-        // should probably not hang indefinitely. If we panic
-        // instead, at least the end user has the chance to pass
-        // panic= to the kernel.
-        var futex: u32 = 0;
-        while (true) std.Options.debug_io.futexWaitUncancelable(u32, &futex, 0);
-        unreachable;
-    };
-    kmsg.deinit();
-    init.arena.deinit();
-
-    const argv_buf = try fba.allocator().allocSentinel(?[*:0]const u8, 1, null);
-    argv_buf[0] = stage2_init;
-
-    comptime std.debug.assert(builtin.link_libc);
-    const err = system.errno(system.execve(
-        argv_buf.ptr[0].?,
-        argv_buf.ptr,
-        std.process.Environ.empty.block.slice,
-    ));
-    log.err("execve '{s}' failed: {}", .{ stage2_init, err });
-    @panic("PANIC");
+    @panic("init could not transition to stage 2");
 }

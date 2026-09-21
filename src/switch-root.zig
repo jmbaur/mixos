@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const clap = @import("clap");
+const posix = std.posix;
 const system = std.os.linux;
 
 const Mount = @import("mount.zig");
@@ -17,6 +18,33 @@ const params = clap.parseParamsComptime(
 );
 
 const next_store = "/run/nextstore";
+
+const kexec_loaded_path = "/sys/kernel/kexec_loaded";
+
+/// Whether a kernel has been loaded and is ready to be booted.
+pub fn kexecLoaded(io: std.Io) bool {
+    const file = std.Io.Dir.cwd().openFile(io, kexec_loaded_path, .{}) catch return false;
+    defer file.close(io);
+
+    var buffer: [16]u8 = undefined;
+    var reader = file.reader(io, &buffer);
+    const byte = reader.interface.takeByte() catch return false;
+
+    return byte == '1';
+}
+
+/// Boot the kernel that has already been loaded, if there is one. This gives
+/// us an equivalent of systemctl kexec, since busybox's init.c does not have
+/// one.
+fn kexecIfLoaded(io: std.Io) !void {
+    if (!kexecLoaded(io)) {
+        return;
+    }
+
+    log.info("kexec kernel loaded, booting it", .{});
+
+    try posix.reboot(.KEXEC);
+}
 
 fn mountOf(path: [*:0]const u8) ?u64 {
     var stx: system.Statx = undefined;
@@ -177,8 +205,12 @@ pub fn main(
 
     if (system.getpid() != 1) {
         log.err("not running as PID1, refusing to continue", .{});
-        @panic("PANIC");
+        return error.NotPid1;
     }
+
+    kexecIfLoaded(init.io) catch |err| {
+        log.err("kexec failed, falling back to a switch-root: {}", .{err});
+    };
 
     const staged = stagedManifest(init.io, allocator);
 
@@ -234,14 +266,11 @@ pub fn main(
         releaseLoopDevice(init.io, minor);
     }
 
-    const argv_buf = try stage2_fba.allocator().allocSentinel(?[*:0]const u8, 1, null);
-    argv_buf[0] = stage2_init;
-
     const err = system.errno(system.execve(
-        argv_buf.ptr[0].?,
-        argv_buf.ptr,
+        stage2_init[0].?,
+        stage2_init.ptr,
         std.process.Environ.empty.block.slice,
     ));
-    log.err("execve '{s}' failed: {}", .{ stage2_init, err });
-    @panic("PANIC");
+    log.err("execve '{s}' failed: {}", .{ stage2_init[0].?, err });
+    @panic("switch-root could not transition to next root");
 }

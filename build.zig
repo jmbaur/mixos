@@ -54,6 +54,7 @@ fn addLibkmod(
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .pic = true,
         }),
     });
     libkmod_shared.root_module.addIncludePath(kmod_dep.path(""));
@@ -76,6 +77,7 @@ fn addLibkmod(
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .pic = true,
         }),
     });
     libkmod.root_module.addCSourceFiles(.{
@@ -141,6 +143,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            .pic = true,
         }),
     });
     libmnl.root_module.addCSourceFiles(.{
@@ -159,8 +162,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/kconfig.zig"),
             .target = buildtools_target,
             .optimize = optimize,
+            .pic = true,
         }),
     });
+    kconfig.pie = true;
     kconfig.root_module.addImport("clap", clap_dep.module("clap"));
     b.getInstallStep().dependOn(&b.addInstallArtifact(kconfig, .{
         .dest_dir = .{ .override = buildtools_dir },
@@ -173,8 +178,10 @@ pub fn build(b: *std.Build) void {
             .target = buildtools_target,
             .optimize = optimize,
             .link_libc = true,
+            .pic = true,
         }),
     });
+    copy_modules_closure.pie = true;
     copy_modules_closure.root_module.addImport("clap", clap_dep.module("clap"));
     copy_modules_closure.root_module.linkLibrary(addLibkmod(b, buildtools_target, optimize));
     b.getInstallStep().dependOn(&b.addInstallArtifact(copy_modules_closure, .{
@@ -189,6 +196,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .strip = false, // let stdenv strip hook do this for us, giving us debug info integration
         .link_libc = true,
+        .pic = true,
     });
     mixos_module.addOptions("build_options", build_options);
     mixos_module.addImport("clap", clap_dep.module("clap"));
@@ -209,6 +217,7 @@ pub fn build(b: *std.Build) void {
         .name = "mixos",
         .root_module = mixos_module,
     });
+    mixos.pie = true;
     b.installArtifact(mixos);
 
     const mixos_runner = b.addExecutable(.{

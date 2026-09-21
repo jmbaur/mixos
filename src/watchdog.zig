@@ -33,9 +33,7 @@ pub fn init(io: std.Io, timeout: u32) !Watchdog {
 pub fn ping(self: *Watchdog) void {
     self.inner.keepAlive() catch |err| {
         log.warn("failed to ping the watchdog: {}", .{err});
-        return;
     };
-    log.debug("watchdog ping", .{});
 }
 
 /// Without `disarm`, the watchdog is left running with nothing to ping it, so

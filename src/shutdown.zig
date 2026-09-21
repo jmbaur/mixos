@@ -55,6 +55,8 @@ pub fn main(
 
     defer system.sync();
 
+    log.info("tearing down stateful mounts", .{});
+
     const root_mount_id = mountOf("/") orelse return;
 
     inline for (init_mod.state_bind_mounts) |clone| {

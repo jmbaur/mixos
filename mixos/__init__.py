@@ -207,7 +207,7 @@ def cli():
         case "Reboot":
             with Machine(args.address) as machine:
                 machine.Reboot(reboot_type=str(args.reboot_type))
-                print(f'machine rebooted with reboot type "{args.reboot_type}"')
+                print(f'requested machine reboot with reboot type "{args.reboot_type}"')
         case _:
             parser.print_usage()
             exit(1)

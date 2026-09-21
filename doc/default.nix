@@ -72,6 +72,7 @@ runCommand "mixos-manual-${version}"
 
     cp --no-preserve=all ${./manual.md} manual.md
     cp --no-preserve=all ${./preface.md} preface.md
+    cp --no-preserve=all ${./kernel-parameters.md} kernel-parameters.md
     cp --no-preserve=all ${./options.md} options.md
 
     substituteInPlace manual.md --replace-fail '@MIXOS_VERSION@' ${lib.escapeShellArg version}
