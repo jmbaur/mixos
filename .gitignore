@@ -1,4 +1,5 @@
 *.initrd
+*.png
 *.qcow2
 .nixos-test-history
 /.direnv
