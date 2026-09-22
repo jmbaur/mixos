@@ -136,6 +136,15 @@ let
         '';
       };
 
+      options.testing.kernelCmdline = mkOption {
+        type = types.listOf types.str;
+        default = [ ];
+        description = ''
+          Extra parameters appended to the kernel command line the test
+          framework boots this machine with.
+        '';
+      };
+
       options.testing.qemu = {
         args = mkOption {
           type = types.listOf types.str;
@@ -275,7 +284,8 @@ let
       kernelCmdline = [
         "debug"
       ]
-      ++ optionals mixosConfig.nixpkgs.pkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ];
+      ++ optionals mixosConfig.nixpkgs.pkgs.stdenv.hostPlatform.isx86_64 [ "console=ttyS0,115200" ]
+      ++ mixosConfig.testing.kernelCmdline;
       qemuOpts = escapeShellArgs (
         mixosConfig.testing.qemu.args
         ++ [
