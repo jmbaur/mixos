@@ -2,7 +2,7 @@
   description = "MixOS, a Minimal Nix OS";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
     pyproject-nix.url = "github:pyproject-nix/pyproject.nix";
     pyproject-nix.inputs.nixpkgs.follows = "nixpkgs";
     flake-compat = {
@@ -50,7 +50,7 @@
     {
       overlays.default = final: prev: {
         mixos = final.callPackage ./package.nix {
-          revision = inputs.self.rev or "main";
+          revision = inputs.self.shortRev or inputs.self.dirtyShortRev or "main";
         };
 
         pythonPackagesExtensions = prev.pythonPackagesExtensions ++ [
@@ -153,25 +153,27 @@
         let
           python = pkgs.python3.override {
             self = python;
-            packageOverrides = pyfinal: _: {
-              mixos = pyfinal.callPackage (
-                { mkPythonEditablePackage }:
-                mkPythonEditablePackage (
-                  {
-                    root = "$REPO_ROOT";
-                  }
-                  // pythonProject.renderers.mkPythonEditablePackage { inherit (pyfinal) python; }
-                  // {
-                    inherit version;
-                  }
-                )
-              ) { };
-            };
+            packageOverrides =
+              pyfinal:
+              const {
+                mixos = pyfinal.callPackage (
+                  { mkPythonEditablePackage }:
+                  mkPythonEditablePackage (
+                    {
+                      root = "$REPO_ROOT";
+                    }
+                    // pythonProject.renderers.mkPythonEditablePackage { inherit (pyfinal) python; }
+                    // {
+                      inherit version;
+                    }
+                  )
+                ) { };
+              };
           };
 
           runnerMixos = inputs.self.lib.mixosSystem {
             modules = [
-              (_: {
+              {
                 nixpkgs = { inherit pkgs; };
 
                 init.shell = {
@@ -185,7 +187,7 @@
                       "/dev/console";
                   process = "/bin/sh";
                 };
-              })
+              }
             ];
           };
         in
