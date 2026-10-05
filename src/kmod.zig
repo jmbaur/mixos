@@ -1,10 +1,6 @@
 const std = @import("std");
 
-const C = @cImport({
-    @cInclude("stdio.h");
-    @cInclude("syslog.h");
-    @cInclude("libkmod/libkmod.h");
-});
+const C = @import("c");
 
 const log = std.log.scoped(.mixos);
 const kmod_log = std.log.scoped(.kmod);
@@ -15,8 +11,8 @@ ctx: *C.kmod_ctx,
 
 // Zig has no portable way of spelling out C's `va_list`, so we pull the type
 // out of the log callback's signature as translated for the current target.
-const KmodLogFn = @typeInfo(@typeInfo(@TypeOf(C.kmod_set_log_fn)).@"fn".params[1].type.?).optional.child;
-const VaList = @typeInfo(@typeInfo(KmodLogFn).pointer.child).@"fn".params[6].type.?;
+const KmodLogFn = @typeInfo(@typeInfo(@TypeOf(C.kmod_set_log_fn)).@"fn".param_types[1].?).optional.child;
+const VaList = @typeInfo(@typeInfo(KmodLogFn).pointer.child).@"fn".param_types[6].?;
 
 // Longer messages get truncated, kmod's log messages are well within this.
 const log_buf_size = 1024;
@@ -164,10 +160,10 @@ pub fn moduleClosure(
                 continue;
             }
 
-            try closure.put(allocator, try allocator.dupe(u8, std.mem.span(dep_module_path)), void{});
+            try closure.put(allocator, try allocator.dupe(u8, std.mem.span(dep_module_path)), {});
         }
 
-        try closure.put(allocator, try allocator.dupe(u8, std.mem.span(module_path)), void{});
+        try closure.put(allocator, try allocator.dupe(u8, std.mem.span(module_path)), {});
     }
 
     return closure;

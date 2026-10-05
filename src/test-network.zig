@@ -85,14 +85,14 @@ pub fn main(init: std.process.Init, name: []const u8, args: *std.process.Args.It
         var buf: [std.posix.IFNAMESIZE]u8 = undefined;
         try netlink.setInterfaceName(
             .{ .index = index },
-            try std.fmt.bufPrintZ(&buf, "mixos{d}", .{index}),
+            try std.mem.printSentinel(&buf, "mixos{d}", .{index}, 0),
         );
     }
 
     for (interfaces, indexes) |interface, index| {
         try netlink.setInterfaceName(
             .{ .index = index },
-            try allocator.dupeZ(u8, interface.name),
+            try allocator.dupeSentinel(u8, interface.name, 0),
         );
 
         try netlink.setInterfaceState(.{ .index = index }, .up);

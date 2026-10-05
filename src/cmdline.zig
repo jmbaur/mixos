@@ -1,8 +1,6 @@
 const std = @import("std");
 
-const C = @cImport({
-    @cInclude("asm-generic/setup.h");
-});
+const C = @import("c");
 
 const log = std.log.scoped(.mixos);
 

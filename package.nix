@@ -5,7 +5,7 @@
   lib,
   nukeReferences,
   stdenvNoCC,
-  zig_0_16,
+  zig_0_17,
 
   revision ? "main", # just for docs
 }:
@@ -36,7 +36,7 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   nativeBuildInputs = [
     bintools # needed for strip hook
     nukeReferences
-    zig_0_16
+    zig_0_17
   ];
 
   # Prevent zig (or anything else) from being in the runtime closure (debug output is excluded).
@@ -45,8 +45,9 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   dontSetZigDefaultFlags = true;
 
   zigBuildFlags = [
-    "-Doptimize=ReleaseSafe"
+    "-Doptimize=safe"
     "-Dcpu=baseline"
+    "--build-id=sha1" # used by separateDebugInfo
     "-Dtarget=${
       {
         "armv7l-linux" = "arm-linux";
@@ -74,10 +75,10 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   '';
 
   passthru = {
-    deps = buildPackages.zig_0_16.fetchDeps {
+    deps = buildPackages.zig_0_17.fetchDeps {
       pname = "mixos";
       inherit (finalAttrs) src version;
-      hash = "sha256-A3pySKRvLqRuNEP0AwEIYemVG6l5iysmYX7B/GVHumQ=";
+      hash = "sha256-E0J8FsSmUDD6oc/1A7OUXd6nZMbLqi+zKMwbDdDHqBM=";
     };
 
     manual = callPackage ./doc {

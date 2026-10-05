@@ -10,9 +10,7 @@ const posix = std.posix;
 const process = @import("process.zig");
 const std = @import("std");
 const system = std.os.linux;
-const C = @cImport({
-    @cInclude("linux/fcntl.h");
-});
+const C = @import("c");
 
 const log = std.log.scoped(.mixos);
 
@@ -166,7 +164,7 @@ pub fn setupRoot(
     try std.Io.Dir.cwd().createDirPath(io, store_dir_relative);
     try store.finish(
         std.Io.Dir.cwd(),
-        try allocator.dupeZ(u8, store_dir_relative),
+        try allocator.dupeSentinel(u8, store_dir_relative, 0),
         Mount.Options.RDONLY | Mount.Options.NODEV | Mount.Options.NOSUID,
     );
 
@@ -209,7 +207,7 @@ fn overrideStoreMixos(io: std.Io, arena_alloc: std.mem.Allocator, root_dir: std.
     defer root_dir.deleteFile(io, copy_name) catch {};
 
     var self_mount = try Mount.initTree(root_dir, copy_name);
-    try self_mount.finish(std.Io.Dir.cwd(), try arena_alloc.dupeZ(u8, target), Mount.Options.RDONLY);
+    try self_mount.finish(std.Io.Dir.cwd(), try arena_alloc.dupeSentinel(u8, target, 0), Mount.Options.RDONLY);
 
     log.info("swapped {s} with current mixos executable", .{target});
 }
@@ -375,7 +373,7 @@ fn loadDeviceModules(io: std.Io, allocator: std.mem.Allocator, kmod: *Kmod) !voi
                 continue;
             }
 
-            try seen.put(allocator, try allocator.dupe(u8, modalias), void{});
+            try seen.put(allocator, try allocator.dupe(u8, modalias), {});
             found_new = true;
 
             // Plenty of devices have no module to go with them, discard error.
@@ -524,7 +522,7 @@ fn initState(
         }
     }
 
-    const fstype = try allocator.dupeZ(u8, state.fsType);
+    const fstype = try allocator.dupeSentinel(u8, state.fsType, 0);
     defer allocator.free(fstype);
 
     log.debug("mounting state with fstype {s}", .{state.fsType});
@@ -681,7 +679,7 @@ fn setupServices(io: std.Io, allocator: std.mem.Allocator, services_value: std.j
             log.err("failed to setup service '{s}': {}", .{ service_name, err });
         };
 
-        try managed_services.put(allocator, try allocator.dupe(u8, service_name), void{});
+        try managed_services.put(allocator, try allocator.dupe(u8, service_name), {});
     }
 
     // Cleanup mixos managed services that no longer exist.
@@ -975,7 +973,7 @@ pub fn bringUp(
     // Copied into the caller's allocator because everything else we are
     // holding goes away with the old root.
     const argv = try stage2_init_allocator.allocSentinel(?[*:0]const u8, manifest.init.len, null);
-    for (manifest.init, 0..) |arg, i| argv[i] = try stage2_init_allocator.dupeZ(u8, arg);
+    for (manifest.init, 0..) |arg, i| argv[i] = try stage2_init_allocator.dupeSentinel(u8, arg, 0);
 
     if (watchdog) |*w| w.deinit(init.io, .{ .disarm = true });
 

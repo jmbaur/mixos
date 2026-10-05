@@ -2,19 +2,7 @@ const posix = std.posix;
 const std = @import("std");
 const system = std.os.linux;
 
-const C = @cImport({
-    @cInclude("fcntl.h");
-    @cInclude("linux/loop.h");
-    @cInclude("linux/major.h");
-    @cInclude("linux/mount.h");
-    @cInclude("linux/watchdog.h");
-});
-
-// Separate from the import above, since the kernel's <linux/fcntl.h> that this
-// brings in clashes with libc's <fcntl.h>.
-const pidfd_h = @cImport({
-    @cInclude("linux/pidfd.h");
-});
+const C = @import("c");
 
 const log = std.log.scoped(.mixos);
 
@@ -434,14 +422,16 @@ pub fn pipe2(flags: system.O) ![2]posix.fd_t {
     }
 }
 
+/// Flags for pidfd_send_signal(), from <linux/pidfd.h>. That header can't be
+/// translated alongside libc's <fcntl.h>, and zig's std doesn't define them.
 pub const PIDFD_SIGNAL = struct {
     /// The thread the pidfd refers to.
-    pub const THREAD = pidfd_h.PIDFD_SIGNAL_THREAD;
+    pub const THREAD = 1 << 0;
     /// The whole process the pidfd refers to.
-    pub const THREAD_GROUP = pidfd_h.PIDFD_SIGNAL_THREAD_GROUP;
+    pub const THREAD_GROUP = 1 << 1;
     /// Every process in the process group led by the process the pidfd refers
     /// to, even once that process is gone.
-    pub const PROCESS_GROUP = pidfd_h.PIDFD_SIGNAL_PROCESS_GROUP;
+    pub const PROCESS_GROUP = 1 << 2;
 };
 
 pub fn pidfdSendSignal(pidfd: posix.fd_t, signal: posix.SIG, flags: u32) !void {

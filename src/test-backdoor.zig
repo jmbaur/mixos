@@ -4,7 +4,7 @@ const clap = @import("clap");
 
 const params = clap.parseParamsComptime(
     \\-h, --help  Display this help and exit.
-    \\<listen>    Where to listen, as vsock:<port>, unix:<path> or <ip>:<port>.
+    \\<listen>    Where to listen, as vsock:<cid>:<port>, /<path> or <ip>:<port>.
     \\            Left out, the kernel cmdline is consulted and then guessed at.
     \\
 );
@@ -121,8 +121,8 @@ const Context = struct {
             try request_context.serializeResponse(.{
                 .exit_code = switch (term) {
                     .exited => |exited| @as(u32, exited),
-                    .signal => |signal| @intFromEnum(signal),
-                    .stopped => |stopped| @intFromEnum(stopped),
+                    .signal => |signal| @backingInt(signal),
+                    .stopped => |stopped| @backingInt(stopped),
                     .unknown => |unknown| unknown,
                 },
                 .stdout = stdout.written(),
@@ -137,11 +137,12 @@ const ListenParam = union(enum) {
     unix: std.Io.net.UnixAddress,
     ip_address: std.Io.net.IpAddress,
 
+    /// Prints the same form that `parse` accepts.
     pub fn format(self: @This(), writer: *std.Io.Writer) std.Io.Writer.Error!void {
         switch (self) {
-            .vsock => |address| try writer.print("device:/dev/vsock:{}:{}", .{ address.cid, address.port }),
-            .unix => |address| try writer.print("unix:{s}", .{address.path}),
-            .ip_address => |address| try writer.print("tcp:{f}", .{address}),
+            .vsock => |address| try writer.print("vsock:{}:{}", .{ address.cid, address.port }),
+            .unix => |address| try writer.writeAll(address.path),
+            .ip_address => |address| try writer.print("{f}", .{address}),
         }
     }
 
@@ -161,6 +162,19 @@ const ListenParam = union(enum) {
         }
     }
 };
+
+test "ListenParam format output can be parsed" {
+    for ([_][]const u8{
+        "vsock:3:8000",
+        "/run/test-backdoor.sock",
+        "127.0.0.1:8000",
+        "[::]:8000",
+    }) |arg| {
+        const formatted = try std.fmt.allocPrint(std.testing.allocator, "{f}", .{try ListenParam.parse(arg)});
+        defer std.testing.allocator.free(formatted);
+        try std.testing.expectEqualStrings(arg, formatted);
+    }
+}
 
 /// Kernel parameter saying where the backdoor listens, for a machine whose
 /// test framework cannot pass it an argument.
@@ -316,7 +330,7 @@ pub fn main(
         },
         .ip_address => |address| try init.io.vtable.netListenIp(init.io.userdata, &address, .{ .reuse_address = true }),
     };
-    var server: std.Io.net.Server = .{ .socket = socket, .options = void{} };
+    var server: std.Io.net.Server = .{ .socket = socket, .options = {} };
     defer server.deinit(init.io);
 
     log.info("server listening on {f}", .{listen_param});

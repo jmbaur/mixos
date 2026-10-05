@@ -17,7 +17,7 @@ const commands = struct {
     pub const shutdown = @import("shutdown.zig");
 };
 
-const command_decls = @typeInfo(commands).@"struct".decls;
+const command_decl_names = @typeInfo(commands).@"struct".decl_names;
 
 /// The commands above, as something clap can parse an argument into. Built
 /// from the same declarations that are dispatched to, so there is no second
@@ -27,8 +27,8 @@ const Command = std.meta.DeclEnum(commands);
 const command_names = b: {
     var names: []const u8 = "";
 
-    for (command_decls, 0..) |decl, i| {
-        names = names ++ (if (i == 0) "" else ", ") ++ decl.name;
+    for (command_decl_names, 0..) |name, i| {
+        names = names ++ (if (i == 0) "" else ", ") ++ name;
     }
 
     break :b names;
@@ -48,9 +48,9 @@ fn run(
     init: std.process.Init,
     args: *std.process.Args.Iterator,
 ) anyerror!void {
-    inline for (command_decls) |decl| {
-        if (command == @field(Command, decl.name)) {
-            return @field(commands, decl.name).main(init, decl.name, args);
+    inline for (command_decl_names) |name| {
+        if (command == @field(Command, name)) {
+            return @field(commands, name).main(init, name, args);
         }
     }
 

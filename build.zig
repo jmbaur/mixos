@@ -103,6 +103,42 @@ fn addLibkmod(
     return libkmod;
 }
 
+fn addCImport(
+    b: *std.Build,
+    module: *std.Build.Module,
+    kmod_dep: *std.Build.Dependency,
+    libmnl_dep: *std.Build.Dependency,
+) void {
+    const translate_c = b.addTranslateC(.{
+        .root_source_file = b.addWriteFiles().add("c.h",
+            \\#include <asm-generic/setup.h>
+            \\#include <fcntl.h>
+            \\#include <libkmod/libkmod.h>
+            \\#include <libmnl/libmnl.h>
+            \\#include <linux/loop.h>
+            \\#include <linux/major.h>
+            \\#include <linux/mount.h>
+            \\#include <linux/netlink.h>
+            \\#include <linux/rtnetlink.h>
+            \\#include <linux/vm_sockets.h>
+            \\#include <linux/watchdog.h>
+            \\#include <net/if.h>
+            \\#include <stdio.h>
+            \\#include <sys/epoll.h>
+            \\#include <sys/ioctl.h>
+            \\#include <sys/socket.h>
+            \\#include <syslog.h>
+            \\#include <time.h>
+            \\
+        ),
+        .target = module.resolved_target.?,
+        .optimize = module.optimize.?,
+    });
+    translate_c.addIncludePath(kmod_dep.path(""));
+    translate_c.addIncludePath(libmnl_dep.path("include"));
+    module.addImport("c", translate_c.createModule());
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{
         .default_target = .{
@@ -125,15 +161,14 @@ pub fn build(b: *std.Build) void {
 
     const optimize = b.standardOptimizeOption(.{});
 
-    // used by nixpkgs' separateDebugInfo
-    b.build_id = .sha1;
-
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", @import("build.zig.zon").version);
 
     const cpio_dep = b.dependency("cpio", .{});
 
     const clap_dep = b.dependency("clap", .{});
+
+    const kmod_dep = b.dependency("kmod", .{});
 
     const libmnl_dep = b.dependency("libmnl", .{});
     const libmnl = b.addLibrary(.{
@@ -184,6 +219,7 @@ pub fn build(b: *std.Build) void {
     copy_modules_closure.pie = true;
     copy_modules_closure.root_module.addImport("clap", clap_dep.module("clap"));
     copy_modules_closure.root_module.linkLibrary(addLibkmod(b, buildtools_target, optimize));
+    addCImport(b, copy_modules_closure.root_module, kmod_dep, libmnl_dep);
     b.getInstallStep().dependOn(&b.addInstallArtifact(copy_modules_closure, .{
         .dest_dir = .{ .override = buildtools_dir },
     }).step);
@@ -202,6 +238,7 @@ pub fn build(b: *std.Build) void {
     mixos_module.addImport("clap", clap_dep.module("clap"));
     mixos_module.linkLibrary(libmnl);
     mixos_module.linkLibrary(libkmod);
+    addCImport(b, mixos_module, kmod_dep, libmnl_dep);
     mixos_module.addImport("varlink", varlink_dep.module("varlink"));
     mixos_module.addImport(
         "mixos_varlink",
@@ -232,9 +269,7 @@ pub fn build(b: *std.Build) void {
 
     const runner_tool = b.addRunArtifact(mixos_runner);
     runner_tool.addArtifactArg(mixos);
-    if (b.args) |args| {
-        runner_tool.addArgs(args);
-    }
+    runner_tool.addPassthruArgs();
 
     const run_step = b.step("run", "Run in qemu");
     run_step.dependOn(&runner_tool.step);
@@ -248,6 +283,7 @@ pub fn build(b: *std.Build) void {
     unit_tests_module.addOptions("build_options", build_options);
     unit_tests_module.addImport("clap", clap_dep.module("clap"));
     unit_tests_module.linkLibrary(libkmod);
+    addCImport(b, unit_tests_module, kmod_dep, libmnl_dep);
 
     const unit_tests = b.addTest(.{
         .root_module = unit_tests_module,

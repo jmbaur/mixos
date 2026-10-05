@@ -1,12 +1,6 @@
 const std = @import("std");
 
-const C = @cImport({
-    @cInclude("libmnl/libmnl.h");
-    @cInclude("linux/netlink.h");
-    @cInclude("linux/rtnetlink.h");
-    @cInclude("net/if.h");
-    @cInclude("time.h");
-});
+const C = @import("c");
 
 pub const mac_address_len = 6;
 

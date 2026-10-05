@@ -2,9 +2,7 @@ const builtin = @import("builtin");
 const posix = std.posix;
 const std = @import("std");
 const linux = @import("linux.zig");
-const C = @cImport({
-    @cInclude("sys/epoll.h");
-});
+const C = @import("c");
 
 const EPOLL = std.os.linux.EPOLL;
 
@@ -77,11 +75,11 @@ fn handlePid(args: CallbackArgs) anyerror!?std.process.Child.Term {
     }
 
     const status: u32 = @bitCast(siginfo.fields.common.second.sigchld.status);
-    const code: std.os.linux.CLD = @enumFromInt(siginfo.code);
+    const code: std.os.linux.CLD = @fromBackingInt(@intCast(siginfo.code));
     return switch (code) {
         .EXITED => .{ .exited = @truncate(status) },
-        .KILLED, .DUMPED => .{ .signal = @enumFromInt(status) },
-        .TRAPPED, .STOPPED => .{ .stopped = @enumFromInt(status) },
+        .KILLED, .DUMPED => .{ .signal = @fromBackingInt(@intCast(status)) },
+        .TRAPPED, .STOPPED => .{ .stopped = @fromBackingInt(@intCast(status)) },
         _, .CONTINUED => .{ .unknown = status },
     };
 }
@@ -94,7 +92,7 @@ fn handleError(args: CallbackArgs) anyerror!?std.process.Child.Term {
         .stderr_done = true,
     };
 
-    const T = std.meta.Int(.unsigned, @bitSizeOf(anyerror));
+    const T = @Int(.unsigned, @bitSizeOf(anyerror));
 
     var err_buf: [@sizeOf(T)]u8 = undefined;
     _ = posix.system.read(args.errfd, &err_buf, err_buf.len);

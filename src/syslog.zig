@@ -1,8 +1,6 @@
 const std = @import("std");
 const log = @import("log.zig");
-const C = @cImport({
-    @cInclude("syslog.h");
-});
+const C = @import("c");
 
 /// Larger than the default read buffer of the busybox syslogd implementation, so this should be fine.
 /// https://github.com/mirror/busybox/blob/371fe9f71d445d18be28c82a2a6d82115c8af19d/sysklogd/syslogd.c#L76

@@ -2,29 +2,28 @@
     .name = .mixos,
     .version = "1.13.0",
     .fingerprint = 0x9025926ecf183446,
-    .minimum_zig_version = "0.16.0",
+    .minimum_zig_version = "0.17.0",
     .paths = .{ "build.zig", "build.zig.zon", "com.jmbaur.mixos.varlink", "src" },
     .dependencies = .{
         .cpio = .{
-            .url = "https://github.com/jmbaur/cpio-zig/archive/ef0f6afcb052e5886196732410027d5bc028d38c.tar.gz",
-            .hash = "cpio-0.1.0--45Eq8wiAAD6iCzNraQDROe4nIpbQCmmZmDN1ZQKeVCT",
+            .url = "https://github.com/jmbaur/cpio-zig/archive/74743615a9728d9ffb5a764095d54880de1bc747.tar.gz",
+            .hash = "cpio-0.1.0--45Eq4rpAAD83XNHEncH_0pmabISSu8VlsbOSYEynoen",
         },
         .kmod = .{
             .url = "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git/snapshot/kmod-34.2.tar.gz",
             .hash = "N-V-__8AACXSEAC4vv9Dh65rS1ICs847KPjvNop6RIHJUDNN",
         },
-        // TODO(jared): switch to upstream source when zig supports downloading tar.bz2
         .libmnl = .{
-            .url = "https://github.com/jmbaur/libmnl/archive/libmnl-1.0.5.tar.gz",
+            .url = "git+https://git.netfilter.org/libmnl?ref=libmnl-1.0.5#493aacf2ec9cc61a5b30d77cd55ec248f033bc74",
             .hash = "N-V-__8AAMIaAwDYBt7lOXYUh8tiLjyYaauIABaUpZAtfTcN",
         },
         .varlink = .{
-            .url = "https://github.com/jmbaur/zig-varlink/archive/c083558a083b3f7a23754f57f4fca1962d8e71fe.tar.gz",
-            .hash = "zig_varlink-0.1.0-nZ9B9mYjAgBkwiJroOPIK9QtM3YGd5BABFMI9Jv5hE9U",
+            .url = "https://github.com/jmbaur/zig-varlink/archive/a1a6e9974ceef98a43733a4835296facad4e3487.tar.gz",
+            .hash = "zig_varlink-0.1.0-nZ9B9iEmAgAak07kjMjDd2d-c6GDpFwfwjPGESXnxtzh",
         },
         .clap = .{
-            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.12.0.tar.gz",
-            .hash = "clap-0.12.0-oBajB7foAQDqlSwaSG5g0yq7xGbQARUsBk5T64gAOqP5",
+            .url = "https://github.com/Hejsil/zig-clap/archive/05faf3905e8548f5cc269a8836e154065e70128d.tar.gz",
+            .hash = "clap-0.12.0-oBajB4XpAQCF1WRKnD5KOKPsnwwT_NNdAJ7Ww3irYJac",
         },
     },
 }

@@ -2,7 +2,7 @@
   description = "MixOS, a Minimal Nix OS";
 
   inputs = {
-    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
+    nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst";
     pyproject-nix.url = "github:pyproject-nix/pyproject.nix";
     pyproject-nix.inputs.nixpkgs.follows = "nixpkgs";
     flake-compat = {
@@ -195,7 +195,7 @@
           default = pkgs.mkShell {
             packages = [
               (python.withPackages (p: [ p.mixos ]))
-              pkgs.zig_0_16
+              pkgs.zig_0_17
             ];
             shellHook = ''
               unset ZIG_GLOBAL_CACHE_DIR
@@ -213,7 +213,7 @@
           runtimeInputs = [
             pkgs.nixfmt
             pkgs.ruff
-            pkgs.zig_0_16
+            pkgs.zig_0_17
             pkgs.statix
             pkgs.zigimports
           ];

@@ -3,10 +3,7 @@ const posix = std.posix;
 const std = @import("std");
 const system = std.os.linux;
 
-const C = @cImport({
-    @cInclude("linux/fcntl.h");
-    @cInclude("linux/mount.h");
-});
+const C = @import("c");
 
 /// A mount, not necessarily attached anywhere yet. Comes either from a
 /// `Context` or from cloning an existing tree.

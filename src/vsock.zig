@@ -1,11 +1,7 @@
 const std = @import("std");
 const posix = std.posix;
 
-const C = @cImport({
-    @cInclude("sys/ioctl.h");
-    @cInclude("sys/socket.h");
-    @cInclude("linux/vm_sockets.h");
-});
+const C = @import("c");
 
 pub const VMADDR_CID_HOST = C.VMADDR_CID_HOST;
 
