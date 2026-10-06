@@ -170,7 +170,14 @@ in
             f"the machine placed its own crash without the debug output:\n{trace}"
         )
 
-        frames = re.findall(r"0x([0-9a-f]+) in (\S+)", trace)
+        # The unwinder runs out at libc's _start, which is hand-written assembly
+        # with no unwind or line info. The machine prints that frame as "???",
+        # and there is nothing in it for the debug output to place either.
+        frames = [
+            (address, name)
+            for address, name in re.findall(r"0x([0-9a-f]+) in (\S+)", trace)
+            if name != "???"
+        ]
         assert frames, f"no addresses in:\n{trace}"
 
 
